@@ -1037,10 +1037,10 @@ public:
    }
    vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
    {
-      for (auto m : X) {
+      for (Matrix& m : X) {
          m.setZero();
       }
-      for (int i = 0; i < InputChannels; i++)
+      for (int i = 0; i < OutputChannels; i++)
       {
          BackPool(X, child_grad[i], Zr[i], Zc[i], Zm[i] );
       }
@@ -1189,17 +1189,19 @@ public:
       Y = y;
       int y_max_index = 0;
       int x_max_index = 0;
-      double max = 0.0;
+      double xmax = 0.0;
+      double ymax = 0.0;
       double loss = 0.0;
       for (int i = 0; i < Size; i++) {
-         if (x[i] > max) { max = x[i]; x_max_index = i; }
+         if (x[i] > xmax) { xmax = x[i]; x_max_index = i; }
+         // This method will handle a y array that is a proper distribution not
+         // just one-hot encoded.
+         if (y[i] > ymax) { ymax = y[i]; y_max_index = i; }
+         // No reason to evaulate this expression if y[i]==0.0 .
          if (y[i] != 0.0) {
-            y_max_index = i; 
-            // No reason to evaulate this expression if y[i]==0.0 .
             //                        Prevent undefined results when taking the log of 0
             loss -= y[i] * std::log( std::max(x[i], std::numeric_limits<Number>::epsilon()));
          }
-
       }
       if (x_max_index == y_max_index) {
          Correct++;
@@ -1213,7 +1215,8 @@ public:
       //RowVector g(Size);
       for (int i = 0; i < Size; i++) {
          if (X[i] == 0.0 ) {
-            G[i] = Y[i] == 0.0 ? 0.0 : -10.0;
+            //G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);
+            G[i] = 0.0;
          }
          else {
             G[i] = -Y[i] / X[i];

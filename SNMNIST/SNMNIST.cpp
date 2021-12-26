@@ -11,14 +11,112 @@ typedef vector< shared_ptr<Layer> > layer_list;
 layer_list LayerList;
 LossCrossEntropy loss;
 
+string path = "C:\\projects\\neuralnet\\simplenet\\SNMNIST\\weights";
+string model_name = "layer";
+
+void SaveModelWeights()
+{
+   int l = 1;
+
+   for (const auto& lit : LayerList) {
+      lit->Save(make_shared<OMultiWeightsCSV>(path, model_name + "." + to_string(l) ));
+      lit->Save(make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++) ));
+   }
+}
+
+void InitFCModel(bool restore)
+{
+   model_name = "FC32";
+   LayerList.clear();
+
+   // FC Layer 1 -----------------------------------------
+   // Type: FC Layer
+   int size_in  = MNISTReader::DIM;
+   int size_out = 32;
+
+   int l = 1; // Layer counter
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, new ReLu(size_out),
+                 restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
+                           dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
+   l++;
+
+   // FC Layer 2 -----------------------------------------
+   // Type: FC Layer
+   size_in  = size_out;
+   size_out = 10;
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, new SoftMax(size_out),
+                 restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
+                           dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
+
+   loss.Init(size_out, 1);
+}
+
+typedef void (*InitModelFunction)(bool);
+
+InitModelFunction InitModel = InitFCModel;
+
+#define COMPUTE_LOSS {\
+   cv = dl[n].x;\
+   for (auto lli : LayerList) {\
+      cv = lli->Eval(cv);\
+   }\
+   e = loss.Eval(cv, dl[n].y);\
+}
+
+void TestGradComp()
+{
+   MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-images-idx3-ubyte",
+      "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-labels-idx1-ubyte");
+
+   InitModel(false);
+
+   double e;
+
+   MNISTReader::MNIST_list dl = reader.read_batch(10);
+   Matrix dif(32,MNISTReader::DIM);
+   ColVector cv;
+   int n = 8;
+
+   for (int r = 0; r < 32; r++) {
+      for (int c = 0; c < MNISTReader::DIM; c++) {
+         double f1, f2;
+         double eta = 1.0e-12;
+         double w1 = LayerList[0]->W(r, c);
+         //----- Eval ------
+         LayerList[0]->W(r, c) = w1 - eta;
+         COMPUTE_LOSS
+         f1 = e;
+
+         LayerList[0]->W(r, c) = w1 + eta;
+         COMPUTE_LOSS
+         f2 = e;
+
+         LayerList[0]->W(r, c) = w1;
+         COMPUTE_LOSS
+         RowVector g = loss.LossGradiant();
+         for (int i = LayerList.size() - 1; i >= 0; --i) {
+               g = LayerList[i]->BackProp(g);
+         }
+   
+
+         double grad1 = LayerList[0]->grad_W(c,r);
+         //-------------------------
+
+         double grad = (f2 - f1) / (2.0*eta);
+         dif(r, c) = abs(grad - grad1);
+      } 
+   }
+
+   cout << "dW Max error: " << dif.maxCoeff() << endl;
+
+   cout << "enter a key and press Enter" << endl;
+   char c;
+   cin >> c;
+}
+
 void Train( int nloop )
 {
-   //------------ setup the network ------------------------------
-   LayerList.push_back(make_shared<Layer>(MNISTReader::DIM, 32, new ReLu(32), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-   LayerList.push_back(make_shared<Layer>(32, 10, new SoftMax(10), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-
-   loss.Init(10, 1);
-   //-------------------------------------------------------------
+   InitModel(false);
 
    MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-images-idx3-ubyte",
       "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-labels-idx1-ubyte");
@@ -56,42 +154,24 @@ void Train( int nloop )
       }
       auto end = chrono::steady_clock::now();
       auto diff = end - start;
+      //std::cout << std::setprecision(3) << avg_e << endl;
       std::cout << "avg error: " << std::setprecision(3) << avg_e << " correct/incorrect " << loss.Correct << " , " << loss.Incorrect << " Compute time: " << chrono::duration <double, milli>(diff).count() << " ms" << endl;
       loss.ResetCounters();
    }
-
+   
    std::cout << "Save? y/n:  ";
    char c;
    std::cin >> c;
    if (c == 'y') {
-      int l = 0;
-      for (const auto& lit : LayerList) {
-         l++;
-         string layer = to_string(l);
-         lit->Save(make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer." + layer + ".wts"));
-         lit->Save(make_shared<WriteWeightsCSV>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer." + layer + ".wts.csv"));
-      }
+      SaveModelWeights();
    }
+   
 }
 
 void Test()
 {
-   //------------ setup the network ------------------------------
-   LayerList.push_back(make_shared<Layer>(MNISTReader::DIM, 32, new ReLu(32), make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.1.wts")));
-   LayerList.push_back(make_shared<Layer>(32, 10, new SoftMax(10), make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.2.wts")));
+   InitModel(true);
 
-   loss.Init(10, 1);
-   //-------------------------------------------------------------
-   /*
-      int l = 0;
-      for (const auto& lit : LayerList) {
-         l++;
-         string layer = to_string(l);
-         lit->Save(make_shared<WriteWeightsCSV>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\LayerT." + layer + ".wts.csv"));
-      }
-
-      exit(2);
-      */
    MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\test\\t10k-images-idx3-ubyte",
       "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\test\\t10k-labels-idx1-ubyte");
    ColVector X;
@@ -119,54 +199,10 @@ void Test()
 int main(int argc, char* argv[])
 {
    std::cout << "Starting simpleMNIST\n";
-   /*
-   Layer tl(5, 3, new ReLu(3),  make_shared<InitWeightsToConstants>(0.0, 0.0) );
-   Matrix& w = tl.W;
-   for (int r = 0; r < 3; r++) {
-      for (int c = 0; c < 6; c++) {
-         w(r, c) = r;
-      }
-   }
 
-   tl.Save(make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.test.wts"));
+   //TestGradComp();
+   //exit(0);
 
-   Layer rl(5, 3, new ReLu(3), make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.test.wts") );
-
-   cout << rl.W << endl;
-   exit(1);
-   */
-   /*
-   IOWeightsBinary rd("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.2.wts");
-   Matrix w(10,32+1);
-   rd.Init(w);
-   for (int r = 0; r < 10; r++) {
-      for (int c = 0; c < 10; c++) {
-         cout << w(r, c) << ",";
-      }
-      cout << endl;
-   }
-
-   exit(0);
-   */
-   /*    Matrix m(5, 10);
-       m.row(0).setConstant(1.0);
-       m.row(1).setConstant(2.0);
-       m.row(2).setConstant(3.0);
-       m.row(3).setConstant(4.0);
-       m.row(4).setConstant(5.0);
-
-       WriteWeightsBinary wrt("C:\\projects\\neuralnet\\simpleMNIST\\Layer.1.wts");
-       ReadWeightsBinary rd("C:\\projects\\neuralnet\\simpleMNIST\\Layer.test.wts");
-
-       wrt.Write(m);
-
-       Matrix n(5, 10);
-       rd.Init(n);
-
-       Matrix o = n - m;
-
-       cout << o << endl;
-   */
    if (argc > 0 && string(argv[1]) == "train") {
       Train( atoi(argv[2]) );
 /*

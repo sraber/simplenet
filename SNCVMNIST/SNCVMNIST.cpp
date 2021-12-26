@@ -197,33 +197,6 @@ public:
    }
 };
 
-void InitFCOnlyModel(bool restore)
-{
-   model_name = "FCO";
-   ConvoLayerList.clear();
-   LayerList.clear();
-
-   // Setup a few global parameters for use by the gradent checker.
-   // Set the values of kpc and ks above.
-   kpc = 1;
-   ks = MNISTReader::DIM;
-
-   // FC Layer 1 -----------------------------------------
-   // Type: FC Layer
-   int size_in  = MNISTReader::DIM;
-   int size_out = 32;
-
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new ReLu(size_out), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-
-   // FC Layer 2 -----------------------------------------
-   // Type: FC Layer
-   int size_in  = size_out;
-   int size_out = 10;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new SoftMax(size_out), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-
-   loss.Init(size_out, 1);
-}
-
 void InitBigKernelModel(bool restore)
 {
    model_name = "BKM5";
@@ -310,7 +283,7 @@ void InitLeNet5Model( bool restore )
    int l = 1; // Layer counter
    //                 Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iInitWeights> _pInit 
    ConvoLayerList.push_back( make_shared<FilterLayer2D>( iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
-                           new ReLu(size_out * size_out), 
+                           new actSigmoid(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out))) );
 
@@ -355,7 +328,7 @@ void InitLeNet5Model( bool restore )
    pad = 0;
    //                 Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iInitWeights> _pInit 
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
-                           new ReLu(size_out * size_out), 
+                           new actSigmoid(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out))) );
 
@@ -364,7 +337,7 @@ void InitLeNet5Model( bool restore )
     chn_in = chn_out;
     chn_out = 1;  // Pool all layers into one layer.
    vector_of_colvector_i maps4(1);
-   maps[0].resize(chn_in); 
+   maps4[0].resize(chn_in); 
    for (int i = 0; i < chn_in; i++) { maps4[0](i) = i; }
    size_in  = size_out;
    size_out = 5;
@@ -384,7 +357,7 @@ void InitLeNet5Model( bool restore )
    pad = 0;
    //                 Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iInitWeights> _pInit 
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
-                           new ReLu(size_out * size_out), 
+                           new actSigmoid(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out))) );
    // Flattening Layer 6
@@ -402,7 +375,7 @@ void InitLeNet5Model( bool restore )
    // Type: ReLU
    size_in = size_out;
    size_out = 84;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new ReLu(size_out), 
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSigmoid(size_out), 
                            restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
 
@@ -520,8 +493,7 @@ void InitGenericNetworkModel(bool restore)
 
 typedef void (*InitModelFunction)(bool);
 
-InitModelFunction InitModel = InitFCOnlyModel;
-//InitModelFunction InitModel = InitLeNet5Model;
+InitModelFunction InitModel = InitLeNet5Model;
 //InitModelFunction InitModel = InitBigKernelModel;
 //InitModelFunction InitModel = InitGenericNetworkModel;
 
@@ -1112,9 +1084,9 @@ int main(int argc, char* argv[])
    //TestVectorOfMatrix();
 
    //TestKernelFlipper();
-   TestGradComp();
+   //TestGradComp();
    //MakeBiasErrorFunction("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\bias_error");
-   exit(0);
+   //exit(0);
   
    if (argc > 0 && string(argv[1]) == "train") {
       Train( atoi(argv[2]) );
