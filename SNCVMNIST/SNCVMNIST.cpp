@@ -40,27 +40,6 @@ void MakeMNISTImage(string file, Matrix m)
    generateBitmapImage(pbytes, 28, 28, 28 * sizeof(pixel_data), file);
 }
 
-void LinearCorrelate( Matrix g, Matrix h, Matrix& out )
-{
-   //cout << h << endl;
-   for (int r = 0; r < out.rows(); r++) {
-      for (int c = 0; c < out.cols(); c++) {
-         double sum = 0.0;
-         for (int rr = 0; rr < h.rows(); rr++) {
-            for (int cc = 0; cc < h.cols(); cc++) {
-               int gr = r + rr;
-               int gc = c + cc;
-               if (gr >= 0 && gr < g.rows() && 
-                     gc >= 0 && gc < g.cols()) {
-                  sum += g(gr, gc) * h(rr, cc);
-               }
-            }
-         }
-         out(r, c) = sum;
-      }
-   }
-}
-
 void ScaleToOne(double* pdata, int size)
 {
    double max = 0.0;
@@ -395,37 +374,31 @@ void InitLeNet5Model( bool restore )
 }
 //------------------------------- End LeNet-5 -------------------------------------
 
-void InitGenericNetworkModel(bool restore)
+void InitLeNet5AModel(bool restore)
 {
-   model_name = "GEN";
+   model_name = "LeNet5A";
    ConvoLayerList.clear();
    LayerList.clear();
-
-   // Setup a few global parameters for use by the gradent checker.
-   // Set the values of kpc and ks above.
-   kpc = 3;
-   ks = 5;
 
    // Convolution Layer 1 -----------------------------------------
    // Type: FilterLayer2D
    int size_in  = 28;
    int size_out = 28;
-   int kern = ks;
+   int kern = ks = 5;
    int pad = 2;
-   int kern_per_chn = kpc;
+   int kern_per_chn = kpc = 32;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
-
-   // Convo Layer 1 -------------------------------------------------
    int l = 1; // Layer counter
-   //                 Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iInitWeights> _pInit 
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new ReLu(size_out * size_out), 
-                           restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++))) : 
+                           restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out)),
                       //               dynamic_pointer_cast<iInitWeights>( make_shared<InitBigKernelConvoLayer>()),
-                           false) ); // No bias
-
+                           false) ); // No bias - false -> use bias
+   l++;
+   //---------------------------------------------------------------
+ 
    // Pooling Layer 2 ----------------------------------------------
    // Type: MaxPool2D
    size_in  = size_out;
@@ -435,6 +408,7 @@ void InitGenericNetworkModel(bool restore)
    assert(!(size_in % size_out));
    ConvoLayerList.push_back(make_shared<MaxPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
+   //---------------------------------------------------------------
 
    // Convolution Layer 3 -----------------------------------------
    // Type: FilterLayer2D
@@ -445,14 +419,24 @@ void InitGenericNetworkModel(bool restore)
    kern_per_chn = 2;
    chn_in = chn_out;
    chn_out = kern_per_chn * chn_in;
-
-   // Convo Layer 4 -------------------------------------------------
-   //                 Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iInitWeights> _pInit 
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new ReLu(size_out * size_out), 
-                           restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++))) : 
+                           restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out))));
-             
+   l++;
+   //---------------------------------------------------------------
+
+   // Pooling Layer 4 ----------------------------------------------
+   // Type: MaxPool2D
+   size_in  = size_out;
+   size_out = 7;
+   chn_in = chn_out;
+
+   assert(!(size_in % size_out));
+   ConvoLayerList.push_back(make_shared<MaxPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   l++;  //Need to account for each layer when restoring.
+   //---------------------------------------------------------------      
+
    // Flattening Layer 5 --------------------------------------------
    // Type: Flatten2D
    size_in  = size_out;
@@ -461,39 +445,43 @@ void InitGenericNetworkModel(bool restore)
    chn_out = 1;
    ConvoLayerList.push_back( make_shared<Flatten2D>(iConvoLayer::Size(size_in, size_in), chn_in) );
    l++;
+   //---------------------------------------------------------------      
 
    //--------- setup the fully connected network -------------------------------------------------------------------------
 
-   // Fully Connected Layer 1 ---------------------------------------
+   // Fully Connected Layer 6 ---------------------------------------
    // Type: ReLU
    size_in = size_out;
-   size_out = 100;
+   size_out = 512;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new ReLu(size_out), 
                            restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out))) );
                                 //     dynamic_pointer_cast<iInitWeights>( make_shared<InitBigKernelFCLayer>())) );
    l++;
+   //---------------------------------------------------------------      
 
-   // Fully Connected Layer 2 ---------------------------------------
+   // Fully Connected Layer 7 ---------------------------------------
    // Type: SoftMAX
    size_in = size_out;
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new SoftMax(size_out), 
                            restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0,chn_out))) );
-                                //     dynamic_pointer_cast<iInitWeights>( make_shared<InitBigKernelFCLayer>())) );
    l++;
+   //---------------------------------------------------------------      
+
    // Loss Layer - Not part of network, must be called seperatly.
    // Type: LossCrossEntropy
    loss.Init(size_out, 1);   
    //--------------------------------------------------------------
 
 }
-//---------------------------- End Generic Network -------------------------------------
+//---------------------------- End LeNet 5A -------------------------------------
 
 typedef void (*InitModelFunction)(bool);
 
-InitModelFunction InitModel = InitLeNet5Model;
+InitModelFunction InitModel = InitLeNet5AModel;
+//InitModelFunction InitModel = InitLeNet5Model;
 //InitModelFunction InitModel = InitBigKernelModel;
 //InitModelFunction InitModel = InitGenericNetworkModel;
 
@@ -781,7 +769,7 @@ void Train(int nloop)
    InitModel(false);
    //InitModel(true);  // Pickup where we left off.
 
-
+   double eta = 1.0;  // Begining learning rate.
    double e = 0;
   // for (int c = 0; c < 5; c++) {
       for (int loop = 0; loop < nloop; loop++) {
@@ -831,7 +819,8 @@ void Train(int nloop)
                }
             }   
          }
-         double eta = 1.0;
+
+         eta = (1.0 / (1.0 + 0.001 * loop)) * eta;
          for (auto lli : ConvoLayerList) {
             //eta = 0.25;
             lli->Update(eta);
@@ -931,159 +920,10 @@ void Test()
    std::cout << " correct/incorrect " << loss.Correct << " , " << loss.Incorrect << endl;
 }
 
-void TestKernelFlipper()
-{
-   // Input matrix size.
-   const int n = 28;
-   // Kernel matrix size.
-   const int kn = 7;
-   // Padding of input matrix.
-   //const int p = (int)floor((double)kn/2.0);
-   const int p = 6; // 14;
-   // Convolution / back propagation delta size.
-   // cn max = n + p - kn
-   const int cn = 29; // 29;
-   // Input delta padding is a function of the kernel size and input padding.
-   int dp = kn - p - 1;
-   // Input matrix padding.
-   int nn = n + 2 * p;
-   // Delta matrix size with padding.
-   int dd = cn + 2 * dp;
-
-   // Make a kernel matrix.  Unroll it into another matrix.
-   // Make a grad matrix.  Flatten that matrix and multiple by the unrolled matrix.
-   // Correlate the matrix with the 180 flip kernel.  The two methods should agree.
-
-   Matrix k(kn, kn);    // Kernel
-   // The incomming delta gradient.  This is the gradient that is formed by multiplying
-   // the child gradient with the activation jacobian.  It is the same size as the convolution
-   // that is output by the current layer.
-   // Here we just generate some random numbers to represent it.
-   Matrix g(cn, cn);     
-
-   
-   Matrix gp(dd, dd);   // Padded Image
-   // Rows is the length of the convolution matrix.
-   // Columns is the length of the Input matrix.
-   Matrix w(cn * cn, n * n); // Unrolled correlation.
-
-   // Backprop result.  Sizeof Input image.  The point of this operation is to
-   // map the back propagation delta of this layer to the size of the input matrix to this layer.
-   Matrix dc1(n,n);  
-   Matrix dc2(n,n);
-
-   k.setRandom();
-   g.setOnes();
-   gp.setZero();
-   w.setZero();
-
-   // Could just build the g matrix right into the padded matrix, but for this
-   // code might as well keep them seperate.
-   gp.block(dp, dp, cn, cn) = g;
-   //WriteWeightsCSV wgp("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\gp.csv");
-   //wgp.Write(gp);
-
-   // Itterate through the rows and columns of the correlation plane.
-   for (int r = 0; r < cn; r++) {
-      for (int c = 0; c < cn; c++) {
-         // Each point in the correlation plane involves a summation over 
-         // the entire target (image) surface.
-         // Apply the kernel to the input image.
-         for (int rr = 0; rr < kn; rr++) {
-            for (int cc = 0; cc < kn; cc++) {
-               // In this code we don't use the padded image.  In fact we don't use
-               // any image.  We are just coping the kernel value to the correct position
-               // in the unwrapped W matrix.
-               int gr = r + rr - p;
-               int gc = c + cc - p;
-               if (gr >= 0 && gr < n && 
-                   gc >= 0 && gc < n ) {
-                  int wc = gc * n + gr;
-                  int wr = c * cn + r;
-                  w(wr, wc) = k(rr, cc);
-               }
-            }
-         }
-      }
-   }
-
-   WriteWeightsCSV writer("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\unwrapmat.csv");
-   writer.Write(w);
-
-   //Eigen::Map<ColVector> cv(g.data(), g.size());
-   //Eigen::Map<ColVector> ov1(dc1.data(), dc1.size());
-
-   // Multiply the flattened grad matrix by the unrolled kernel.
-   // This is just to check normal convolution.
-   //ov1 = w * cv;
-
-
-   //WriteWeightsCSV mov1("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\mov1.csv");
-   //mov1.Write(dc1);
-
-   // Make a row vector and perform the flattened backprop operation.
-   Eigen::Map<RowVector> rv(g.data(), g.size());
-   Eigen::Map<RowVector> rv1(dc1.data(), dc1.size());
-
-   ofstream fov1("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\grv.csv", ios::trunc);
-   fov1 << rv;
-   fov1.close();
-
-   rv1 = rv * w;
-   ofstream frv1("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\rv1.csv", ios::trunc);
-   frv1 << rv1;
-   frv1.close();
-   WriteWeightsCSV mdc1("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\dc1.csv");
-   mdc1.Write(dc1);
-
-   // rotate k by 180 degrees ------------
-      int kn2 = kn / 2;
-      for (int i = 0; i < kn2; i++) {
-         int j = kn - i - 1;
-         for (int c1 = 0; c1 < kn; c1++) {
-            int c2 = kn - c1 - 1;
-            double temp = k(i, c1);
-            k(i, c1) = k(j, c2);
-            k(j, c2) = temp;
-         }
-      }
-      if (kn % 2) {
-         int j = kn / 2;  // Don't add 1.  The zero offset compensates.
-         for (int c1 = 0; c1 < kn2; c1++) {
-            int c2 = kn - c1 - 1;
-            double temp = k(j, c1);
-            k(j, c1) = k(j, c2);
-            k(j, c2) = temp;
-         }
-      }
-   //------------------------------------------
-
-   //WriteWeightsCSV mrk("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\mrk.csv");
-   //mrk.Write(k);
-
-   LinearCorrelate(gp, k, dc2);
-
-   WriteWeightsCSV mdc2("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\dc2.csv");
-   mdc2.Write(dc2);
-
-   Matrix dif(dc2.rows(), dc2.cols());
-   dif = dc1 - dc2;
-   dif.cwiseAbs();
-
-   cout << "Max dc1: " << dc1.cwiseAbs().maxCoeff() <<  " Max dc2: " << dc2.cwiseAbs().maxCoeff() << " Max dif: " << dif.maxCoeff() << endl;
-
-   cout << "enter a key and press Enter" << endl;
-   char c;
-   cin >> c;
-}
-
 int main(int argc, char* argv[])
 {
    std::cout << "Starting Convolution MNIST\n";
-   //TestSave(); 
-   //TestVectorOfMatrix();
-
-   //TestKernelFlipper();
+   //TestSave(); ;
    //TestGradComp();
    //MakeBiasErrorFunction("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\bias_error");
    //exit(0);
@@ -1096,6 +936,6 @@ int main(int argc, char* argv[])
       Test();
    }
 
-   char c;
+   //char c;
    //cin >> c;
 }
