@@ -20,8 +20,8 @@ string model_name = "layer";
 void MakeMNISTImage(string file, Matrix m)
 {
    pixel_data pixel;
-   int rows = m.rows();
-   int cols = m.cols();
+   int rows = (int)m.rows();
+   int cols = (int)m.cols();
 
    unsigned char* pbytes = new unsigned char[rows * cols * sizeof(pixel_data)]; // 24 bit BMP
    unsigned char* pbs = pbytes;
@@ -78,10 +78,6 @@ int GetLabel(ColVector& lv)
 }
 
 
-// These are special global parameter that are used by the gradient checker.
-int kpc;  // The number of kernels used by the first layer of the network.
-int ks;   // The kernel (square) size in the first layer of the network.
-
 //---------------------------------------------------------------------------------
 //                         Big Kernel Method
 //
@@ -116,7 +112,7 @@ public:
       }
       assert(m.rows() == 28 && m.cols() == 28);
       TrasformMNISTtoMatrix(m, dl[ itodl[ReadCount] ].x );
-      ScaleToOne(m.data(), m.rows() * m.cols());
+      ScaleToOne(m.data(), (int)(m.rows() * m.cols()));
       ReadCount++;
 
       //cout << "Read " << pathname << endl;
@@ -132,7 +128,7 @@ public:
 
    void Init(Matrix& m) {
       assert(m.rows() == 10);
-      int step = m.cols() / 10;
+      int step = (int)m.cols() / 10;
       assert(step == 14 * 14);
       Matrix pass_field(14, 14);
       pass_field.setZero();
@@ -182,18 +178,13 @@ void InitBigKernelModel(bool restore)
    ConvoLayerList.clear();
    LayerList.clear();
 
-   // Setup a few global parameters for use by the gradent checker.
-   // Set the values of kpc and ks above.
-   kpc = 5;
-   ks = 28;
-
    // Convolution Layer 1 -----------------------------------------
    // Type: FilterLayer2D
    int size_in  = 28;
    int size_out = 14;
-   int kern = ks;
+   int kern = 28;
    int pad = 7;
-   int kern_per_chn = kpc;
+   int kern_per_chn = 5;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
 
@@ -246,17 +237,12 @@ void InitLeNet5Model( bool restore )
    // Convolution Layer 1
    // Type: FilterLayer2D
 
-   // Setup a few global parameters for use by the gradent checker.
-   // Set the values of kpc and ks above.
-   kpc = 6;  // The number of kernels used by the first layer of the network.
-   ks = 5;   // The kernel (square) size in the first layer of the network.
-
    int size_in  = 28;
    int size_out = 28;
-   int kern_per_chn = kpc;
+   int kern_per_chn = 6;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
-   int kern = ks;
+   int kern = 5;
    int pad = 2;
 
    int l = 1; // Layer counter
@@ -384,9 +370,9 @@ void InitLeNet5AModel(bool restore)
    // Type: FilterLayer2D
    int size_in  = 28;
    int size_out = 28;
-   int kern = ks = 5;
+   int kern = 5;
    int pad = 2;
-   int kern_per_chn = kpc = 32;
+   int kern_per_chn = 32;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
@@ -543,7 +529,7 @@ void MakeBiasErrorFunction( string fileroot )
 
    data.resize(28, 28);
    TrasformMNISTtoMatrix(data, dl[n].x);
-   ScaleToOne(data.data(), data.rows() * data.cols());
+   ScaleToOne(data.data(), (int)(data.rows() * data.cols()));
 
    // NOTE: This is a blind downcast to FilterLayer2D.  We only do this in testing.
    //       The result of the downcast could be tested for null.
@@ -559,7 +545,7 @@ void MakeBiasErrorFunction( string fileroot )
       ipcl->Count = 0;
       vector_of_matrix vm_backprop(1);  // kpc kernels * 1 channel
       RowVector g = loss.LossGradiant();
-      for (int i = LayerList.size() - 1; i >= 0; --i) {
+      for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
          if (i==0) {
             vm_backprop[0] = LayerList[i]->BackProp(g);
          }
@@ -568,7 +554,7 @@ void MakeBiasErrorFunction( string fileroot )
          }
       }
 
-      for (int i = ConvoLayerList.size() - 1; i >= 0; --i) {
+      for (int i = (int)ConvoLayerList.size() - 1; i >= 0; --i) {
          if (i==0) {
             ConvoLayerList[i]->BackProp(vm_backprop,false);
          }
@@ -594,26 +580,28 @@ void TestGradComp()
 
    InitModel(false);
 
+   vector_of_matrix m(1);
+   Matrix data;
+   double e;
+   MNISTReader::MNIST_list dl = reader.read_batch(10);
+
+   // NOTE: This is a blind downcast to FilterLayer2D.  Normally is will resolve to a FilterLayer2D object because
+   //       we are working with the top layer.  The assert will make sure the downcast is valid.
+   shared_ptr<FilterLayer2D> ipcl = dynamic_pointer_cast<FilterLayer2D>(ConvoLayerList[0]);
+   assert(ipcl);
+   int kpc = (int)ipcl->W.size();
+   int ks = ipcl->KernelSize.rows;
+   assert( ks == ipcl->KernelSize.cols);
+
+   Matrix dif(ks, ks);
+
    for (int kn = 0; kn < kpc; kn++) {
-      vector_of_matrix m(1);
-      Matrix data;
-
-      double e;
-
-      MNISTReader::MNIST_list dl = reader.read_batch(10);
-
       ColVector cv;
       int n = 1;
 
       data.resize(28, 28);
       TrasformMNISTtoMatrix(data, dl[n].x);
-      ScaleToOne(data.data(), data.rows() * data.cols());
-
-      Matrix dif(ks, ks);
-
-      // NOTE: This is a blind downcast to FilterLayer2D.  We only do this in testing.
-      //       The result of the downcast could be tested for null.
-      auto ipcl = dynamic_pointer_cast<FilterLayer2D>(ConvoLayerList[0]);
+      ScaleToOne(data.data(), (int)(data.rows() * data.cols()));
 
       for (int r = 0; r < ks; r++) {
          for (int c = 0; c < ks; c++) {
@@ -634,7 +622,7 @@ void TestGradComp()
             COMPUTE_LOSS
             vector_of_matrix vm_backprop(1); 
             RowVector g = loss.LossGradiant();
-            for (int i = LayerList.size() - 1; i >= 0; --i) {
+            for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
                if (i==0) {
                   vm_backprop[0] = LayerList[i]->BackProp(g);
                }
@@ -643,7 +631,7 @@ void TestGradComp()
                }
             }
 
-            for (int i = ConvoLayerList.size() - 1; i >= 0; --i) {
+            for (int i = (int)ConvoLayerList.size() - 1; i >= 0; --i) {
                if (i==0) {
                   vm_backprop = ConvoLayerList[i]->BackProp(vm_backprop,false);
                }
@@ -681,7 +669,7 @@ void TestGradComp()
       vector_of_matrix vm_backprop(1);
       RowVector g = loss.LossGradiant();
 
-      for (int i = LayerList.size() - 1; i >= 0; --i) {
+      for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
          if (i==0) {
             vm_backprop[0] = LayerList[i]->BackProp(g);
          }
@@ -690,7 +678,7 @@ void TestGradComp()
          }
       }
 
-      for (int i = ConvoLayerList.size() - 1; i >= 0; --i) {
+      for (int i = (int)ConvoLayerList.size() - 1; i >= 0; --i) {
          if (i==0) {
             ConvoLayerList[i]->BackProp(vm_backprop,false);
          }
@@ -780,7 +768,7 @@ void Train(int nloop)
             vector_of_matrix m(1);
             m[0].resize(28, 28);
             TrasformMNISTtoMatrix(m[0], dl[n].x);
-            ScaleToOne(m[0].data(), m[0].rows() * m[0].cols());
+            ScaleToOne(m[0].data(), (int)(m[0].rows() * m[0].cols()));
 
             for (auto lli : ConvoLayerList) {
                m = lli->Eval(m);
@@ -801,7 +789,7 @@ void Train(int nloop)
 
             vector_of_matrix vm_backprop(1); 
             RowVector g = loss.LossGradiant();
-            for (int i = LayerList.size() - 1; i >= 0; --i) {
+            for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
                if (i==0) {
                   vm_backprop[0] = LayerList[i]->BackProp(g);
                }
@@ -810,7 +798,7 @@ void Train(int nloop)
                }
             }
 
-            for (int i = ConvoLayerList.size() - 1; i >= 0; --i) {
+            for (int i = (int)ConvoLayerList.size() - 1; i >= 0; --i) {
                if (i==0) {
                   vm_backprop = ConvoLayerList[i]->BackProp(vm_backprop,false);
                }
@@ -822,14 +810,9 @@ void Train(int nloop)
 
          eta = (1.0 / (1.0 + 0.001 * loop)) * eta;
          for (auto lli : ConvoLayerList) {
-            //eta = 0.25;
             lli->Update(eta);
             }
          for (auto lit : LayerList) {
-            //eta = 0.0001;
-            // Uncomment to disable update this layer.
-            //lit->Count = 0;
-            //lit->grad_W.setZero();
             lit->Update(eta);
          }
          cout << "count: " << loop << " error:" << e << endl;
@@ -852,7 +835,7 @@ void Train(int nloop)
       vector_of_matrix m(1);
       m[0].resize(28, 28);
       TrasformMNISTtoMatrix(m[0], X);
-      ScaleToOne(m[0].data(), m[0].rows() * m[0].cols());
+      ScaleToOne(m[0].data(), (int)(m[0].rows() * m[0].cols()));
 
       for (auto lli : ConvoLayerList) {
          m = lli->Eval(m);
@@ -897,7 +880,7 @@ void Test()
 
       m[0].resize(28, 28);
       TrasformMNISTtoMatrix(m[0], X);
-      ScaleToOne(m[0].data(), m[0].rows() * m[0].cols());
+      ScaleToOne(m[0].data(), (int)(m[0].rows() * m[0].cols()));
 
       for (auto lli : ConvoLayerList) {
          m = lli->Eval(m);

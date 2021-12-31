@@ -140,8 +140,8 @@ public:
       if (!file.is_open()) {
          return false;
       }
-      int rows = m.rows();
-      int cols = m.cols();
+      int rows = (int)m.rows();
+      int cols = (int)m.cols();
       for (int r = 0; r < rows; r++) {
          for (int c = 0; c < cols; c++) {
             file << m(r, c);
@@ -174,8 +174,8 @@ public:
          return false;
       }
       MatHeader header;
-      header.rows = m.rows();
-      header.cols = m.cols();
+      header.rows = (int)m.rows();
+      header.cols = (int)m.cols();
       header.step = sizeof(Matrix::Scalar);
 
       file.write(reinterpret_cast<char*>(&header), sizeof(MatHeader));
@@ -356,6 +356,7 @@ public:
    }
 
    Matrix Jacobian(const ColVector& q) {
+      //cout << "Softmax q: " << q << endl;
       for (int r = 0; r < Size; r++) {
          for (int c = 0; c < Size; c++) {
             if (r == c) {
@@ -461,7 +462,6 @@ public:
    ColVector Eval(const ColVector& _x) {
       X.topRows(InputSize) = _x;
       X(InputSize) = 1;  // This accounts for the bias weight.
-      DebugOut("W: " << W << endl << " X: " << X << endl << " W x: " << W * X << endl)
       Z = W * X;
       return pActive->Eval( Z );
    }
@@ -469,11 +469,10 @@ public:
    RowVector BackProp(const RowVector& child_grad, bool want_layer_grad = true ) {
       Count++;
       RowVector delta_grad = child_grad * pActive->Jacobian(Z);
-      DebugOut( "W: " << W << endl )
-      DebugOut( "child_grad: " << child_grad << " J: " << pActive->Jacobian(Z) << "l grad: " << delta_grad << endl )
+      DebugOut( "W: " << W.maxCoeff() << endl )
+      DebugOut( "child_grad: " << child_grad.cwiseAbs().maxCoeff() << " delta_grad: " << delta_grad.cwiseAbs().maxCoeff() << endl )
       Matrix iter_w_grad = X * delta_grad;
-
-      DebugOut("X: " << X << "iter_w_grad: " << iter_w_grad << endl )
+      DebugOut("X: " << X.cwiseAbs().maxCoeff() << ", iter_w_grad: " << iter_w_grad.cwiseAbs().maxCoeff() << endl )
       double a = 1.0 / (double)Count;
       double b = 1.0 - a;
       grad_W = a * iter_w_grad + b * grad_W;
@@ -493,8 +492,8 @@ public:
       Count = 0;
       W = W - eta * grad_W.transpose();
       DebugOut( "-------- UPDATE --------" << endl <<
-         "grad T: " << grad_W.transpose() << endl <<
-         "W: " << W << endl )
+         "grad T: " << grad_W.cwiseAbs().maxCoeff() << endl <<
+         "W: " << W.cwiseAbs().maxCoeff() << endl )
       if (bout) {
          fout << W(0, 0) << "," << W(0, 1) << "," << grad_W(0, 0) << "," << grad_W(1, 0) << endl;
       }
@@ -638,7 +637,7 @@ public:
    {
       assert(k.rows() == k.cols());  // No reason for this.
                                      // The algor could handle rows != cols.
-      int kn = k.rows();
+      int kn = (int)k.rows();
       // rotate k by 180 degrees ------------
       int kn2 = kn / 2;
       for (int i = 0; i < kn2; i++) {
@@ -870,8 +869,8 @@ public:
    {
       int rstep = (int)floor((float)g.rows() / (float)out.rows());
       int cstep = (int)floor((float)g.cols() / (float)out.cols());
-      int rend = rstep * out.rows();
-      int cend = cstep * out.cols();
+      int rend = (int)(rstep * out.rows());
+      int cend = (int)(cstep * out.cols());
       for (int r = 0; r < out.rows(); r++) {
          for (int c = 0; c < out.cols(); c++) {
             int gr = r * rstep;
@@ -978,8 +977,8 @@ public:
    {
       int rstep = (int)floor((float)g[0].rows() / (float)out.rows());
       int cstep = (int)floor((float)g[0].cols() / (float)out.cols());
-      int rend = rstep * out.rows();
-      int cend = cstep * out.cols();
+      int rend = (int)(rstep * out.rows());
+      int cend = (int)(cstep * out.cols());
       for (int r = 0; r < out.rows(); r++) {
          for (int c = 0; c < out.cols(); c++) {
             int gr = r * rstep;
@@ -1215,8 +1214,8 @@ public:
       //RowVector g(Size);
       for (int i = 0; i < Size; i++) {
          if (X[i] == 0.0 ) {
-            //G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);
-            G[i] = 0.0;
+            G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);
+            //G[i] = 0.0;
          }
          else {
             G[i] = -Y[i] / X[i];

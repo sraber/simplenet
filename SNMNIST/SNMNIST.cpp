@@ -17,7 +17,6 @@ string model_name = "layer";
 void SaveModelWeights()
 {
    int l = 1;
-
    for (const auto& lit : LayerList) {
       lit->Save(make_shared<OMultiWeightsCSV>(path, model_name + "." + to_string(l) ));
       lit->Save(make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++) ));
@@ -38,6 +37,7 @@ void InitFCModel(bool restore)
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new ReLu(size_out),
                  restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                            dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
+                           //dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToConstants>(0.1,0.0))) );
    l++;
 
    // FC Layer 2 -----------------------------------------
@@ -47,6 +47,7 @@ void InitFCModel(bool restore)
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new SoftMax(size_out),
                  restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                            dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
+                           //dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToConstants>(0.1,0.0))) );
 
    loss.Init(size_out, 1);
 }
@@ -73,12 +74,14 @@ void TestGradComp()
    double e;
 
    MNISTReader::MNIST_list dl = reader.read_batch(10);
-   Matrix dif(32,MNISTReader::DIM);
+   int rows = LayerList[0]->W.rows();
+   int cols = LayerList[0]->W.cols();
+   Matrix dif(rows,cols);
    ColVector cv;
-   int n = 8;
-
-   for (int r = 0; r < 32; r++) {
-      for (int c = 0; c < MNISTReader::DIM; c++) {
+   int n = 0;
+   double max = 0.0;
+   for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
          double f1, f2;
          double eta = 1.0e-12;
          double w1 = LayerList[0]->W(r, c);
@@ -95,11 +98,14 @@ void TestGradComp()
          COMPUTE_LOSS
          RowVector g = loss.LossGradiant();
          for (int i = LayerList.size() - 1; i >= 0; --i) {
-               g = LayerList[i]->BackProp(g);
+            LayerList[i]->Count = 0;
+            g = LayerList[i]->BackProp(g);
          }
-   
 
-         double grad1 = LayerList[0]->grad_W(c,r);
+         double grad1 = LayerList[0]->grad_W.transpose()(r,c);
+         if (grad1 > max) {
+            max = grad1;
+         }
          //-------------------------
 
          double grad = (f2 - f1) / (2.0*eta);
@@ -107,11 +113,74 @@ void TestGradComp()
       } 
    }
 
-   cout << "dW Max error: " << dif.maxCoeff() << endl;
+   cout << "dW Max error: " << dif.maxCoeff() << " Max error percent: " << 100.0 * dif.maxCoeff() / max << endl;
 
    cout << "enter a key and press Enter" << endl;
    char c;
    cin >> c;
+}
+
+void MakeTrendErrorFunction( int r, int c, string fileroot )
+{
+   string sr = to_string(r);
+   string sc = to_string(c);
+   ofstream owf(fileroot + "." + sr + "." + sc + ".f.csv", ios::trunc);
+   ofstream odwf(fileroot + "." + sr + "." + sc + ".df.csv", ios::trunc);
+
+   assert(owf.is_open());
+   assert(odwf.is_open());
+
+   ColVector w0(1000);
+   w0.setLinSpaced( -0.2 , 1.2 );
+
+   ColVector f(1000);
+   ColVector df(1000);
+   MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-images-idx3-ubyte",
+      "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-labels-idx1-ubyte");
+
+   InitModel(false);
+
+   double e;
+
+   MNISTReader::MNIST_list dl = reader.read_batch(10);
+
+   
+
+   ColVector cv;
+   int n = 0;
+
+   /*
+   for (int i = 0; i < MNISTReader::DIM; i++) {
+      cout << i << " , " << dl[n].x(i) << endl;
+   }
+
+   char cc;
+   cin >> cc;
+   return;
+   */
+
+   double f1;
+   int pos = 0;
+   for (int i = 0; i < 1000; ++i) {
+      LayerList[0]->W(r,c) = w0[i];
+      cv = dl[n].x;
+      for (auto lli : LayerList) { cv = lli->Eval(cv); }
+      f(i) = loss.Eval(cv, dl[n].y);
+
+      LayerList[0]->Count = 0;
+      RowVector g = loss.LossGradiant();
+      for (int i = LayerList.size() - 1; i >= 0; --i) {
+         g = LayerList[i]->BackProp(g);
+      } 
+      df(i) = LayerList[0]->grad_W(c,r);
+   }
+
+   // octave file format
+   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", "\n", "", "", "", "");
+   owf << f.format(OctaveFmt);
+   owf.close();
+   odwf << df.format(OctaveFmt);
+   odwf.close();
 }
 
 void Train( int nloop )
@@ -148,7 +217,7 @@ void Train( int nloop )
             }
          }
          for (const auto& lit : LayerList) {
-            double eta = 0.5;
+            double eta = 1.0;
             lit->Update(eta);
          }
       }
@@ -156,6 +225,10 @@ void Train( int nloop )
       auto diff = end - start;
       //std::cout << std::setprecision(3) << avg_e << endl;
       std::cout << "avg error: " << std::setprecision(3) << avg_e << " correct/incorrect " << loss.Correct << " , " << loss.Incorrect << " Compute time: " << chrono::duration <double, milli>(diff).count() << " ms" << endl;
+      int l = 1;
+      for (const auto& lit : LayerList) {
+         cout << "L " << l++ << "W: " << lit->W.cwiseAbs().maxCoeff() << endl;
+      }
       loss.ResetCounters();
    }
    
@@ -201,27 +274,11 @@ int main(int argc, char* argv[])
    std::cout << "Starting simpleMNIST\n";
 
    //TestGradComp();
-   //exit(0);
+   MakeTrendErrorFunction(11, 156, "C:\\projects\\neuralnet\\simplenet\\SNMNIST\\weights\\trend");
+   exit(0);
 
    if (argc > 0 && string(argv[1]) == "train") {
-      Train( atoi(argv[2]) );
-/*
-      layer_list ll;
-         ll.push_back(make_shared<Layer>(MNISTReader::DIM, 32, new ReLu(32), make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.1.wts")));
-   ll.push_back(make_shared<Layer>(32, 10, new SoftMax(10), make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNMNIST\\Layer.2.wts")));
-
-   Matrix d1(33, MNISTReader::DIM);
-   Matrix d2(11, 32);
-
-   d1 = LayerList[0]->W - ll[0]->W;
-   d2 = LayerList[1]->W - ll[1]->W;
-   d1.cwiseAbs();
-   d2.cwiseAbs();
-
-   cout << d1.maxCoeff() << endl << d2.maxCoeff();
-   exit(2);
-*/
-      
+      Train( atoi(argv[2]) );  
    }
    else {
       Test();
