@@ -168,14 +168,14 @@ int main(int argc, char* argv[])
    for (const auto& lit : LayerList) { g = lit->Eval(g); }
    loss.Eval(g, Y);
 
-   RowVector bp = loss.LossGradiant();
+   RowVector bp = loss.LossGradient();
    for (layer_list::reverse_iterator riter = LayerList.rbegin();
       riter != LayerList.rend();
       riter++) {
       bp = (*riter)->BackProp(bp);
    }
 
-   cout << LayerList[0]->grad_W.transpose()(r,c) << endl;
+   cout << LayerList[0]->dW.transpose()(r,c) << endl;
 
    exit(0);
    */
@@ -205,7 +205,7 @@ int main(int argc, char* argv[])
          double b = 1 - a;
          avg_error = a * error + b * avg_error;
         // cout << "------ Error: " << error << "------------" << endl;
-         RowVector g = loss.LossGradiant();
+         RowVector g = loss.LossGradient();
 
          for (layer_list::reverse_iterator riter = LayerList.rbegin();
             riter != LayerList.rend();

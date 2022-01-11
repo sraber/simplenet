@@ -59,7 +59,7 @@ layer_list LayerList;
 
 void TestMPG(void)
 {
-   LayerList.push_back(make_shared<Layer>(1, 1, new Linear(1),
+   LayerList.push_back(make_shared<Layer>(1, 1, new actLinear(1),
       make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNRegression\\SNRegress.1.wts") ));
 
    ColVector X(1);
@@ -89,12 +89,12 @@ int main(int argc, char* argv[])
 
 
    //------------ setup the network ------------------------------
-   LayerList.push_back( make_shared<Layer>(1, 1, new Linear(1), make_shared<InitWeightsToConstants>(0.1, 0.0)
+   LayerList.push_back( make_shared<Layer>(1, 1, new actLinear(1), make_shared<InitWeightsToConstants>(0.1, 0.0)
       /*, "C:\\projects\\neuralnet\\simplenet\\SNRegression\\weights.csv"*/));
    LossL2 loss(1, 1);
    //-------------------------------------------------------------
    /*
-   Layer ly(1, 1, new Linear(1), make_shared<InitWeightsToConstants>(-6.5, 23.515));
+   Layer ly(1, 1, new actLinear(1), make_shared<InitWeightsToConstants>(-6.5, 23.515));
 
    ColVector X(1);
    ColVector Y(1);
@@ -110,7 +110,7 @@ int main(int argc, char* argv[])
    double g2 = loss.Eval(ly.Eval(X), Y);
 
    cout << (g1 - g2) / (2.0 * e) << endl;
-   cout << ly.BackProp( loss.LossGradiant(), true );
+   cout << ly.BackProp( loss.LossGradient(), true );
 
    exit(0);
    */
@@ -133,7 +133,7 @@ int main(int argc, char* argv[])
          }
          double error = loss.Eval(X, Y);
          //cout << "------ Error: " << error << "------------" << endl;
-         RowVector g = loss.LossGradiant();
+         RowVector g = loss.LossGradient();
 
          for (layer_list::reverse_iterator riter = LayerList.rbegin();
             riter != LayerList.rend();

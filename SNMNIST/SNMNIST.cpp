@@ -34,7 +34,7 @@ void InitFCModel(bool restore)
    int size_out = 32;
 
    int l = 1; // Layer counter
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new ReLu(size_out),
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, new actReLU(size_out),
                  restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                            dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
                            //dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToConstants>(0.1,0.0))) );
@@ -44,7 +44,7 @@ void InitFCModel(bool restore)
    // Type: FC Layer
    size_in  = size_out;
    size_out = 10;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new SoftMax(size_out),
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out),
                  restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
                            dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
                            //dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToConstants>(0.1,0.0))) );
@@ -74,8 +74,8 @@ void TestGradComp()
    double e;
 
    MNISTReader::MNIST_list dl = reader.read_batch(10);
-   int rows = LayerList[0]->W.rows();
-   int cols = LayerList[0]->W.cols();
+   int rows = (int)LayerList[0]->W.rows();
+   int cols = (int)LayerList[0]->W.cols();
    Matrix dif(rows,cols);
    ColVector cv;
    int n = 0;
@@ -96,13 +96,13 @@ void TestGradComp()
 
          LayerList[0]->W(r, c) = w1;
          COMPUTE_LOSS
-         RowVector g = loss.LossGradiant();
+         RowVector g = loss.LossGradient();
          for (int i = LayerList.size() - 1; i >= 0; --i) {
             LayerList[i]->Count = 0;
             g = LayerList[i]->BackProp(g);
          }
 
-         double grad1 = LayerList[0]->grad_W.transpose()(r,c);
+         double grad1 = LayerList[0]->dW.transpose()(r,c);
          if (grad1 > max) {
             max = grad1;
          }
@@ -168,11 +168,11 @@ void MakeTrendErrorFunction( int r, int c, string fileroot )
       f(i) = loss.Eval(cv, dl[n].y);
 
       LayerList[0]->Count = 0;
-      RowVector g = loss.LossGradiant();
+      RowVector g = loss.LossGradient();
       for (int i = LayerList.size() - 1; i >= 0; --i) {
          g = LayerList[i]->BackProp(g);
       } 
-      df(i) = LayerList[0]->grad_W(c,r);
+      df(i) = LayerList[0]->dW(c,r);
    }
 
    // octave file format
@@ -208,7 +208,7 @@ void Train( int nloop )
             avg_e = a * error + b * avg_e;
 
             //cout << "------ Error: " << error << "------------" << endl;
-            RowVector g = loss.LossGradiant();
+            RowVector g = loss.LossGradient();
 
             for (layer_list::reverse_iterator riter = LayerList.rbegin();
                riter != LayerList.rend();

@@ -5,11 +5,7 @@
 #include <fstream>
 #include <list>
 #include <stdexcept>
-
-// Dev Notes:
-// - The Save functions are not working for convo layers.
-// - Save to CSV:  
-//   Not implemented for new 2 parameter saving method.
+#include <random>
 
 //#define TRACE
 #ifdef TRACE
@@ -41,7 +37,7 @@ typedef std::vector<double> vector_of_number;
 //
 // The interface is meant to be implemented as a fly-weight pattern.
 // The vector passed into the Eval method is used as an input/output 
-// parameter.  It carries the so-called Z vector (W*X+B) in and may be
+// parameter.  It carries the so-called Z vector (W*X+B) in, and may be
 // unaltered or trasfomed to what is needed by the Jacobian method.
 // The caller is responsible for storing the vector until the 
 // Jacobian is needed.
@@ -55,7 +51,11 @@ public:
    virtual int Length() = 0;
 };
 // -------------------------------------------------------
-
+// ----------- Weight Matrix IO interfaces ---------------
+// Implement the iInitWeights interface by objects that are 
+// used to initialize a network layer.
+// Implement the iOutputWeights interface by objects that
+// are used by a layer Save method to persist the layer weights.
 class iInitWeights {
 public:
    virtual ~iInitWeights() = 0 {};
@@ -68,6 +68,38 @@ public:
    virtual bool Write(Matrix& w) = 0;
 };
 
+class iGetWeights {
+public:
+   virtual ~iGetWeights () = 0 {};
+   virtual void ReadConvo(Matrix& w, int k) = 0;
+// This allows implementation to account for the 
+// augmented weight matrix and initialize the bias properly.
+// This is only needed for Init objects.  Read/Write to file
+// takes care of itself.
+   virtual void ReadFC(Matrix& w) = 0;
+};
+
+class iPutWeights {
+public:
+   virtual ~iPutWeights () = 0 {};
+   virtual bool Write(Matrix& w, int k) = 0;
+};
+//---------------------------------------------------------
+// ------- The Loss Layer interface ------------------------
+class iLossLayer {
+public:
+   virtual ~iLossLayer() = 0 {};
+   virtual Number Eval(const ColVector& x, const ColVector& y) = 0;
+   virtual RowVector LossGradient(void) = 0;
+};
+// ---------------------------------------------------------
+//----------- The Convolutional Network layer interface ----
+// The convolutional network requires an interface to abstract
+// the various network components.  Unlike a fully connected 
+// network, a convolutional network is not a homogenious list of 
+// objects.  There is convolution, pooling layers, and flattening
+// layers, to name a few.  The iConvoLayer interface allows us
+// to place the various objects into a single list.
 class iConvoLayer {
 public:
    struct Size {
@@ -81,6 +113,8 @@ public:
    virtual void Update(double eta) = 0;
    virtual void Save(shared_ptr<iOutputWeights> _pOut) = 0;
 };
+//-----------------------------------------------------------
+//---------- Weight initializer and output implementations -----
 
 class InitWeightsToConstants : public iInitWeights {
 public:
@@ -93,8 +127,6 @@ public:
    }
 };
 
-// REVIEW: This doesn't work well for convo layer.  The bias vector is a seperate vector
-//         in a convo layer.  We don't have a way to handel that now.
 class InitWeightsToRandom : public iInitWeights {
 public:
    double Scale;
@@ -123,6 +155,53 @@ public:
       else{
          w.setRandom();
          w *= Scale;
+         if (!IsConvoLayer && BiasConstant) {
+            w.rightCols(1).setConstant(Bias);
+         }
+      }
+      if (IsConvoLayer) { Count--; }
+   }
+};
+
+class InitWeightsToRandomXavier : public iInitWeights {
+public:
+   double StdDev;
+   double Bias;
+   bool BiasConstant;
+   bool IsConvoLayer;
+   int Count = 0;
+   InitWeightsToRandomXavier(double std_dev) : StdDev(std_dev), Bias(0.0), BiasConstant(false), IsConvoLayer(false), Count(1) {}
+   InitWeightsToRandomXavier(double std_dev, double bias) : StdDev(std_dev), Bias(bias), BiasConstant(true), IsConvoLayer(false), Count(1) {}
+   InitWeightsToRandomXavier(double std_dev, double bias, int kernels) : StdDev(std_dev), Bias(bias), BiasConstant(true), IsConvoLayer(true), Count(kernels) {}
+   void Init(Matrix& w) {
+      if (Count < 0) {
+         throw("Error.  InitWeightsToRandom not called correctly.");
+      }
+
+      std::default_random_engine generator;
+      std::normal_distribution<double> distribution(0.0,StdDev);
+
+      // Count only reachs zero for Convo Layers. 
+      // Count == 0 means this is a call on the bias matrix.
+
+      if (Count == 0) {
+         if (BiasConstant) {
+            w.setConstant(Bias);
+         }
+         else {
+            for (int r = 0; r < w.rows(); r++) {
+               for (int c = 0; c < w.cols(); c++) {
+                  w(r, c) = distribution(generator);
+               }
+            }
+         }
+      }
+      else{
+         for (int r = 0; r < w.rows(); r++) {
+            for (int c = 0; c < w.cols(); c++) {
+               w(r, c) = distribution(generator);
+            }
+         }
          if (!IsConvoLayer && BiasConstant) {
             w.rightCols(1).setConstant(Bias);
          }
@@ -267,12 +346,14 @@ public:
       return true;
    }
 };
+//----------------------------------------------------------------
+// Activation Functions ------------------------------------------
 
-class ReLu : public iActive {
+class actReLU : public iActive {
    int Size;
    ColVector Temp;
 public:
-   ReLu(int size) : Size(size),Temp(size) {}
+   actReLU(int size) : Size(size),Temp(size) {}
    // Z = W x + b.  Z is what is passed into the activation function.
    // It can be modified for use by the Jacobian later.
    ColVector Eval(ColVector& z) {
@@ -290,6 +371,35 @@ public:
    Matrix Jacobian(const ColVector& z) {
       for (int i = 0; i < Size; i++) {
          Temp(i) = z(i) > 0.0 ? 1.0 : 0.0;
+      }
+      return Temp.asDiagonal();
+   }
+   int Length() { return Size; }
+};
+
+class actLeakyReLU : public iActive {
+   int Size;
+   const double Alpha;
+   ColVector Temp;
+public:
+   actLeakyReLU(int size, double alp) : Size(size),Temp(size),Alpha(alp) {}
+   // Z = W x + b.  Z is what is passed into the activation function.
+   // It can be modified for use by the Jacobian later.
+   ColVector Eval(ColVector& z) {
+      for (int i = 0; i < Size; i++) {
+         Temp(i) = z(i) >= 0.0 ? z(i) : Alpha * z(i);
+      }
+      return Temp;
+   }
+   ColVector Eval(Eigen::Map<ColVector>& z) {
+      for (int i = 0; i < Size; i++) {
+         Temp(i) = z(i) >= 0.0 ? z(i) : Alpha * z(i);
+      }
+      return Temp;
+   }
+   Matrix Jacobian(const ColVector& z) {
+      for (int i = 0; i < Size; i++) {
+         Temp(i) = z(i) > 0.0 ? 1.0 : Alpha;
       }
       return Temp.asDiagonal();
    }
@@ -335,11 +445,48 @@ public:
    int Length() { return Size; }
 };
 
-class SoftMax : public iActive {
+class actTanh : public iActive {
+   int Size;
+   ColVector J;
+   double Tanh(double s) {
+      double tp = exp(s);
+      double tn = exp(-s);
+      //tsnh = (exp(s) - exp(-s)) / (exp(s) + exp(-s))
+      return (tp - tn) / (tp + tn);
+   }
+public:
+   actTanh(int size) : Size(size), J(size) {}
+   // Z = W x + b.  Z is what is passed into the activation function.
+   ColVector Eval(ColVector& q) {
+      // Vector q carries the z vector on the way in, then is trasformed
+      // to the values of the Tanh on the way out.  It will later
+      // be passed into the Jacobian method and used to compute the jacobian.
+      for (int i = 0; i < Size; i++) {
+         q(i) = Tanh(q(i));
+      }
+      return q;
+   }
+   ColVector Eval(Eigen::Map<ColVector>& q) {
+      for (int i = 0; i < Size; i++) {
+         q(i) = Tanh(q(i));
+      }
+      return q;
+   }
+   Matrix Jacobian(const ColVector& q) {
+      for (int i = 0; i < Size; i++) {
+         J(i) = 1.0 - q(i)*q(i);
+      }
+      return J.asDiagonal();
+   }
+
+   int Length() { return Size; }
+};
+
+class actSoftMax : public iActive {
    int Size;
    Matrix J;
 public:
-   SoftMax(int size) : Size(size), J(size, size) {}
+   actSoftMax(int size) : Size(size), J(size, size) {}
    ColVector Eval(ColVector& q) {
       double sum = 0.0;
       for (int i = 0; i < Size; i++) { q(i) = exp( q(i) ); }
@@ -373,11 +520,11 @@ public:
    int Length() { return Size; }
 };
 
-class Linear : public iActive {
+class actLinear : public iActive {
    int Size;
    ColVector J;
 public:
-   Linear(int size) : Size(size), J(size) {
+   actLinear(int size) : Size(size), J(size) {
       J.setOnes();
    }
    ColVector Eval(ColVector& x) {
@@ -393,11 +540,11 @@ public:
    int Length() { return Size; }
 };
 
-class Square : public iActive {
+class actSquare : public iActive {
    int Size;
    ColVector J;
 public:
-   Square(int size) : Size(size), J(size) {}
+   actSquare(int size) : Size(size), J(size) {}
    ColVector Eval(ColVector& x) {
       return x*x;
    }
@@ -413,7 +560,7 @@ public:
    int Length() { return Size; }
 };
 
-
+// Fully Connected Layer ----------------------------------------
 class Layer {
 public:
    int Count;
@@ -422,7 +569,7 @@ public:
    ColVector X;
    ColVector Z;
    Matrix W;
-   Matrix grad_W;
+   Matrix dW;
    iActive* pActive;
    std::ofstream fout;
    bool bout;
@@ -432,7 +579,7 @@ public:
       X(input_size+1), 
       // Add an extra column for the bias weight.
       W(output_size, input_size+1),
-      grad_W(input_size+1, output_size ),
+      dW(input_size+1, output_size ),
       pActive(_pActive),
       InputSize(input_size),
       OutputSize(output_size),
@@ -444,7 +591,7 @@ public:
 
       _pInit->Init(W);
 
-      grad_W.setZero();
+      dW.setZero();
       Count = 0;
 
       bout = false;
@@ -475,7 +622,7 @@ public:
       DebugOut("X: " << X.cwiseAbs().maxCoeff() << ", iter_w_grad: " << iter_w_grad.cwiseAbs().maxCoeff() << endl )
       double a = 1.0 / (double)Count;
       double b = 1.0 - a;
-      grad_W = a * iter_w_grad + b * grad_W;
+      dW = a * iter_w_grad + b * dW;
       if (want_layer_grad) {
          // REVIEW: Performance issue??  The block method seems like less multiplications,
          //         unless it has to do a copy.
@@ -490,15 +637,15 @@ public:
 
    void Update(double eta) {
       Count = 0;
-      W = W - eta * grad_W.transpose();
+      W = W - eta * dW.transpose();
       DebugOut( "-------- UPDATE --------" << endl <<
-         "grad T: " << grad_W.cwiseAbs().maxCoeff() << endl <<
+         "grad T: " << dW.cwiseAbs().maxCoeff() << endl <<
          "W: " << W.cwiseAbs().maxCoeff() << endl )
       if (bout) {
-         fout << W(0, 0) << "," << W(0, 1) << "," << grad_W(0, 0) << "," << grad_W(1, 0) << endl;
+         fout << W(0, 0) << "," << W(0, 1) << "," << dW(0, 0) << "," << dW(1, 0) << endl;
       }
 
-      grad_W.setZero();
+      dW.setZero();
    }
 
    void Save(shared_ptr<iOutputWeights> _pOut) {
@@ -510,8 +657,8 @@ public:
       }
    }
 };
-
-//------------------------- Convolution Layer -----------
+//---------------------------------------------------------------
+// Convolution Layer classes ------------------------------------
 
 class FilterLayer2D : public iConvoLayer {
 public:
@@ -596,7 +743,7 @@ public:
       delete pActive;
    }
 
-   void LinearCorrelate( Matrix g, Matrix h, Matrix& out, double bias = 0.0 )
+   void LinearCorrelate( const Matrix g, const Matrix h, Matrix& out, double bias = 0.0 )
    {
       for (int r = 0; r < out.rows(); r++) {
          for (int c = 0; c < out.cols(); c++) {
@@ -714,7 +861,7 @@ public:
       // child_grad will be a vector of input_channels*kernel_number.
       // Each of those needs to be multiplied by Jacobian, 
       // then linear correlate X mat with layer_grad
-      // then avg sum into grad_W vec mat.
+      // then avg sum into dW vec mat.
       // propagate upstream 
       // layer_grad corr=> rotated kernel to size of InputSize
       // sum results according to kernels per channel.
@@ -834,7 +981,6 @@ class MaxPool2D : public iConvoLayer {
 public:
    Size InputSize;
    Size OutputSize;
-   Size KernelSize;
    int Channels;
    // Vector of input matrix.  One per channel.
    vector_of_matrix X;
@@ -869,8 +1015,6 @@ public:
    {
       int rstep = (int)floor((float)g.rows() / (float)out.rows());
       int cstep = (int)floor((float)g.cols() / (float)out.cols());
-      int rend = (int)(rstep * out.rows());
-      int cend = (int)(cstep * out.cols());
       for (int r = 0; r < out.rows(); r++) {
          for (int c = 0; c < out.cols(); c++) {
             int gr = r * rstep;
@@ -920,6 +1064,110 @@ public:
       for (int i = 0; i < Channels; i++)
       {
          BackPool(X[i], child_grad[i], Zr[i], Zc[i]);
+      }
+      return X;
+   }
+   void Update(double eta) 
+   {
+   }
+   void Save(shared_ptr<iOutputWeights> _pOut) 
+   {
+   }
+};
+
+class AvgPool2D : public iConvoLayer {
+   double Denominator;
+   int rstep;
+   int cstep;
+public:
+   Size InputSize;
+   Size OutputSize;
+   int Channels;
+   // Vector of input matrix.  One per channel.
+   vector_of_matrix X;
+
+   // Used for output.
+   vector_of_matrix Z;
+
+   AvgPool2D(Size input_size, int input_channels, Size output_size) :
+      X(input_channels),
+      Z(input_channels),
+      InputSize(input_size),
+      OutputSize(output_size),
+      Channels(input_channels)
+   {
+      rstep = (int)floor((float)InputSize.rows / (float)OutputSize.rows);
+      cstep = (int)floor((float)InputSize.cols / (float)OutputSize.cols);
+      Denominator = rstep * cstep;
+      assert(rstep > 0 && cstep > 0);
+
+      for (Matrix& m : X) {
+         m.resize(input_size.rows, input_size.cols);
+      }
+
+      for (Matrix& m : Z) { m.resize(output_size.rows, output_size.cols); }
+   }
+   ~AvgPool2D() {
+   }
+   void AveragePool( Matrix g, Matrix& out )
+   {
+      assert(out.rows() == OutputSize.rows && out.cols() == OutputSize.cols);
+      for (int r = 0; r < OutputSize.rows; r++) {
+         for (int c = 0; c < OutputSize.cols; c++) {
+            int gr = r * rstep;
+            int gc = c * cstep;
+            double avg = 0.0;
+            for (int rr = 0; rr < rstep; rr++) {
+               for (int cc = 0; cc < cstep; cc++) {
+                  int grr = gr + rr;
+                  int gcc = gc + cc;
+                  avg += g(grr, gcc) / Denominator;
+               }
+            }
+            out(r, c) = avg;
+         }
+      }
+   }
+
+   void BackPool(Matrix& out, Matrix dw)
+   {
+      // REVIEW: It is possible that a combination of parameters could lead
+      //         to a down-sample that does not reach some rows and columns of
+      //         the input matrix.  Here that would lead to untouched rows and columns.
+      //         Those elements need to be zeroed.  The math could be done so that
+      //         the entire matrix does not need to be zeroed.
+      out.setZero();
+      assert(dw.rows() == OutputSize.rows && dw.cols() == OutputSize.cols);
+      for (int r = 0; r < OutputSize.rows; r++) {
+         for (int c = 0; c < OutputSize.cols; c++) {
+            int gr = r * rstep;
+            int gc = c * cstep;
+            double ddw = dw(r,c) / Denominator;
+            for (int rr = 0; rr < rstep; rr++) {
+               for (int cc = 0; cc < cstep; cc++) {
+                  int grr = gr + rr;
+                  int gcc = gc + cc;
+                  out(grr, gcc) = ddw;
+               }
+            }
+         }
+      }
+   }
+
+   vector_of_matrix Eval(const vector_of_matrix& _x)
+   {
+      assert(_x.size() == Channels);
+      for (int i = 0; i < Channels; i++)
+      {
+         AveragePool(_x[i], Z[i] );
+      }
+      return Z;
+   }
+   vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
+   {
+      for (int i = 0; i < Channels; i++)
+      {
+         BackPool(X[i], child_grad[i] );
       }
       return X;
    }
@@ -1052,6 +1300,118 @@ public:
    {
    }
 };
+class AvgPool3D : public iConvoLayer {
+public:
+   Size InputSize;
+   Size OutputSize;
+   Size KernelSize;
+   int InputChannels;
+   int OutputChannels;
+   int rstep;
+   int cstep;
+   vector_of_colvector_i OutputMap;
+   // Vector of input matrix.  One per channel.  Used for backprop.
+   vector_of_matrix X;
+
+   // Used for output.
+   vector_of_matrix Z;
+
+   AvgPool3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) :
+      X(input_channels),
+      Z(output_channels),
+      InputSize(input_size),
+      OutputSize(output_size),
+      InputChannels(input_channels),
+      OutputChannels(output_channels),
+      OutputMap(output_map)
+   {
+      rstep = (int)floor((float)InputSize.rows / (float)OutputSize.rows);
+      cstep = (int)floor((float)InputSize.cols / (float)OutputSize.cols);
+
+      for (Matrix& m : X) {
+         m.resize(input_size.rows, input_size.cols);
+      }
+
+      for (Matrix& m : Z) { m.resize(output_size.rows, output_size.cols); }
+   }
+   ~AvgPool3D() {
+   }
+   void AvgPool( const vector_of_matrix& g, iColVector& m, Matrix& out )
+   {
+      double denominator = rstep * cstep * m.size();
+
+      for (int r = 0; r < out.rows(); r++) {
+         for (int c = 0; c < out.cols(); c++) {
+            int gr = r * rstep;
+            int gc = c * cstep;
+            double avg = 0.0;
+            // Here we are looping over one or more maps.
+            // The vector g is the complete list of convolution maps.
+            // The M vector tells us which of these maps is pooled together.
+            for (int k = 0; k < m.rows(); k++) {
+               for (int rr = 0; rr < rstep; rr++) {
+                  for (int cc = 0; cc < cstep; cc++) {
+                     int grr = gr + rr;
+                     int gcc = gc + cc;
+                     avg += g[ m(k) ](grr, gcc) / denominator;
+                  }
+               }
+            }
+            out(r, c) = avg;
+         }
+      }
+   }
+
+   void BackPool( vector_of_matrix& g, iColVector& m, const Matrix dw )
+   {
+      double denominator = rstep * cstep * m.size();
+
+      for (int r = 0; r < dw.rows(); r++) {
+         for (int c = 0; c < dw.cols(); c++) {
+            int gr = r * rstep;
+            int gc = c * cstep;
+            double ddw = dw(r,c) / denominator;
+            for (int k = 0; k < m.rows(); k++) {
+               for (int rr = 0; rr < rstep; rr++) {
+                  for (int cc = 0; cc < cstep; cc++) {
+                     int grr = gr + rr;
+                     int gcc = gc + cc;
+                     g[ m(k) ](grr, gcc) = ddw;
+                  }
+               }
+            }
+         }
+      }
+   }
+
+   vector_of_matrix Eval(const vector_of_matrix& _x)
+   {
+      assert(_x.size() == InputChannels);
+      for (int i = 0; i < OutputChannels; i++)
+      {
+         AvgPool(_x, OutputMap[i], Z[i] );
+      }
+      return Z;
+   }
+
+   vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
+   {
+      for (Matrix& m : X) {
+         m.setZero();
+      }
+      for (int i = 0; i < OutputChannels; i++)
+      {
+         BackPool(X, OutputMap[i], child_grad[i] );
+      }
+      return X;
+   }
+   void Update(double eta) 
+   {
+   }
+   void Save(shared_ptr<iOutputWeights> _pOut) 
+   {
+   }
+};
 
 class Flatten2D : public iConvoLayer {
 public:
@@ -1121,23 +1481,25 @@ public:
    }
 };
 
-//--------------------------------------------
+//--------------------------------------------------------------
 
 // ------------ Loss Layer
-class LossL2 {
+class LossL2 : public iLossLayer{
 public:
    int Size;
    ColVector Z;
 
+   LossL2() : Size(0) {}
    LossL2(int input_size, int output_size) :
       Z(input_size),
-      Size(input_size)
-   {}
+      Size(input_size){}
 
-
+   void Init(int input_size, int output_size) {
+      Z.resize(input_size);
+      Size = input_size;
+   }
    Number Eval(const ColVector& x, const ColVector& y) {
       Z = x - y;
-      DebugOut( "yh " << x << " y " << y << " Loss Z " << Z.dot(Z) << endl )
       return Z.dot(Z);
    }
 
@@ -1147,13 +1509,13 @@ public:
    //         with the RowVector.
    //         http://ufldl.stanford.edu/tutorial/supervised/MultiLayerNeuralNetworks/
 
-   RowVector LossGradiant(void) {
+   RowVector LossGradient(void) {
       DebugOut("Loss gradiant : " << 2.0 * Z.transpose() << endl)
       return 2.0 * Z.transpose();
    }
 };
 
-class LossCrossEntropy {
+class LossCrossEntropy : public iLossLayer{
 public:
    int Size;
    ColVector X;
@@ -1162,7 +1524,13 @@ public:
 
    int Correct;
    int Incorrect;
-   LossCrossEntropy() {}
+   LossCrossEntropy() 
+   {
+      Size = 0;
+      Correct = 0;
+      Incorrect = 0;
+   }
+
    LossCrossEntropy(int input_size, int output_size) :
       X(input_size),
       Y(input_size),
@@ -1210,11 +1578,18 @@ public:
       return loss;
    }
 
-   RowVector LossGradiant(void) {
+   RowVector LossGradient(void) {
       //RowVector g(Size);
       for (int i = 0; i < Size; i++) {
          if (X[i] == 0.0 ) {
-            G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);
+            if (Y[i] == 0.0) {
+               G[i] = 0.0;
+            }
+            else {
+               G[i] = -10.0;
+               cout << "Loss Gradient encountered div by zero" << endl; // Debug
+            }
+            //G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);
             //G[i] = 0.0;
          }
          else {

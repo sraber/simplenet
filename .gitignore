@@ -364,3 +364,4 @@ FodyWeavers.xsd
 *.csv
 *.bmp
 *.wts
+/simplenet_notes.txt

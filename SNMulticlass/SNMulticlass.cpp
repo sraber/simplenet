@@ -70,7 +70,7 @@ int main(int argc, char* argv[])
 
    //------------ setup the network ------------------------------
    LayerList.push_back(make_shared<Layer>(2, 10, new actSigmoid(10), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-   LayerList.push_back(make_shared<Layer>(10, k, new SoftMax(k), make_shared<InitWeightsToRandom>(0.1, 0.0)));
+   LayerList.push_back(make_shared<Layer>(10, k, new actSoftMax(k), make_shared<InitWeightsToRandom>(0.1, 0.0)));
 
    LossCrossEntropy loss(k, 1);
    //-------------------------------------------------------------
@@ -94,7 +94,7 @@ int main(int argc, char* argv[])
          double b = 1 - a;
          avg_error = a * error + b * avg_error;
          // cout << "------ Error: " << error << "------------" << endl;
-         RowVector g = loss.LossGradiant();
+         RowVector g = loss.LossGradient();
 
          for (layer_list::reverse_iterator riter = LayerList.rbegin();
             riter != LayerList.rend();
