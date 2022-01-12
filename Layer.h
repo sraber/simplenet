@@ -3,6 +3,7 @@
 #include <Eigen>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <list>
 #include <stdexcept>
 #include <random>
@@ -31,6 +32,15 @@ typedef std::vector<iMatrix> vector_of_matrix_i;
 typedef std::vector<iColVector> vector_of_colvector_i;
 typedef std::vector<double> vector_of_number;
 
+//--------- Error Handeling -------------------------------
+#define runtime_assert(expression) \
+   if(!(expression)){ \
+      stringstream s;\
+      s << "runtime assert failed: " << #expression \
+        << "file: " << __FILE__ << endl \
+        << "line: " << __LINE__ << endl; \
+      throw runtime_error(s.str());\
+   }
 
 // -------- The Activation function interface -----------
 // Each kind of Activation function must implement this interface.
@@ -54,24 +64,14 @@ public:
 // ----------- Weight Matrix IO interfaces ---------------
 // Implement the iInitWeights interface by objects that are 
 // used to initialize a network layer.
-// Implement the iOutputWeights interface by objects that
+// Implement the iPutWeights interface by objects that
 // are used by a layer Save method to persist the layer weights.
-class iInitWeights {
-public:
-   virtual ~iInitWeights() = 0 {};
-   virtual void Init(Matrix& w) = 0;
-};
-
-class iOutputWeights {
-public:
-   virtual ~iOutputWeights() = 0 {};
-   virtual bool Write(Matrix& w) = 0;
-};
-
+//
 class iGetWeights {
 public:
    virtual ~iGetWeights () = 0 {};
-   virtual void ReadConvo(Matrix& w, int k) = 0;
+   virtual void ReadConvoWeight(Matrix& w, int k) = 0;
+   virtual void ReadConvoBias(Matrix& w, int k) = 0;
 // This allows implementation to account for the 
 // augmented weight matrix and initialize the bias properly.
 // This is only needed for Init objects.  Read/Write to file
@@ -82,7 +82,7 @@ public:
 class iPutWeights {
 public:
    virtual ~iPutWeights () = 0 {};
-   virtual bool Write(Matrix& w, int k) = 0;
+   virtual void Write(Matrix& w, int k) = 0;
 };
 //---------------------------------------------------------
 // ------- The Loss Layer interface ------------------------
@@ -111,114 +111,171 @@ public:
    virtual vector_of_matrix Eval(const vector_of_matrix& _x) = 0;
    virtual vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true) = 0;
    virtual void Update(double eta) = 0;
-   virtual void Save(shared_ptr<iOutputWeights> _pOut) = 0;
+   virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
 };
 //-----------------------------------------------------------
 //---------- Weight initializer and output implementations -----
 
-class InitWeightsToConstants : public iInitWeights {
-public:
+class IWeightsToConstants : public iGetWeights {
    double Weight;
    double Bias;
-   InitWeightsToConstants(double weight, double bias) : Weight(weight), Bias(bias) {}
-   void Init(Matrix& w) {
+public:
+   IWeightsToConstants(double weight, double bias) : Weight(weight), Bias(bias) {}
+   void ReadConvoWeight(Matrix& w, int k) {
       w.setConstant(Weight);
+   }
+   void ReadConvoBias(Matrix& w, int k){
+      w.setConstant(Weight);
+   }
+   void ReadFC(Matrix& w){
+      w.setConstant(Bias);
       w.rightCols(1).setConstant(Bias);
    }
 };
 
-class InitWeightsToRandom : public iInitWeights {
+class IWeightsToRandom : public iGetWeights {
 public:
    double Scale;
    double Bias;
    bool BiasConstant;
-   bool IsConvoLayer;
-   int Count = 0;
-   InitWeightsToRandom(double scale) : Scale(scale), Bias(0.0), BiasConstant(false), IsConvoLayer(false), Count(1) {}
-   InitWeightsToRandom(double scale, double bias) : Scale(scale), Bias(bias), BiasConstant(true), IsConvoLayer(false), Count(1) {}
-   InitWeightsToRandom(double scale, double bias, int kernels) : Scale(scale), Bias(bias), BiasConstant(true), IsConvoLayer(true), Count(kernels) {}
-   void Init(Matrix& w) {
-      if (Count < 0) {
-         throw("Error.  InitWeightsToRandom not called correctly.");
+
+   IWeightsToRandom(double scale) : Scale(scale), Bias(0.0), BiasConstant(false){}
+   IWeightsToRandom(double scale, double bias) : Scale(scale), Bias(bias), BiasConstant(true){}
+   void ReadConvoWeight(Matrix& w, int k) {
+      w.setRandom();
+      w *= Scale;
+   }
+   void ReadConvoBias(Matrix& w, int k) {
+      if (BiasConstant) {
+         w.setConstant(Bias);
       }
-      // Count only reachs zero for Convo Layers. 
-      // Count == 0 means this is a call on the bias matrix.
-      if (Count == 0) {
-         if (BiasConstant) {
-            w.setConstant(Bias);
-         }
-         else {
-            w.setRandom();
-            w *= Scale;
-         }
-      }
-      else{
+      else {
          w.setRandom();
          w *= Scale;
-         if (!IsConvoLayer && BiasConstant) {
-            w.rightCols(1).setConstant(Bias);
-         }
       }
-      if (IsConvoLayer) { Count--; }
+   }
+   void ReadFC(Matrix& w){
+      w.setRandom();
+      w *= Scale;
+      if (BiasConstant) {
+         w.rightCols(1).setConstant(Bias);
+      }
    }
 };
 
-class InitWeightsToRandomXavier : public iInitWeights {
-public:
+class IWeightsToXavier : public iGetWeights {
    double StdDev;
-   double Bias;
-   bool BiasConstant;
-   bool IsConvoLayer;
-   int Count = 0;
-   InitWeightsToRandomXavier(double std_dev) : StdDev(std_dev), Bias(0.0), BiasConstant(false), IsConvoLayer(false), Count(1) {}
-   InitWeightsToRandomXavier(double std_dev, double bias) : StdDev(std_dev), Bias(bias), BiasConstant(true), IsConvoLayer(false), Count(1) {}
-   InitWeightsToRandomXavier(double std_dev, double bias, int kernels) : StdDev(std_dev), Bias(bias), BiasConstant(true), IsConvoLayer(true), Count(kernels) {}
-   void Init(Matrix& w) {
-      if (Count < 0) {
-         throw("Error.  InitWeightsToRandom not called correctly.");
-      }
-
+public:
+   IWeightsToXavier() : StdDev(-1.0) {}
+   IWeightsToXavier(double std_dev) : StdDev(std_dev) {}
+   void ReadConvoWeight(Matrix& w, int k) {
+      double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.rows() / (double)w.cols()) :  StdDev;
       std::default_random_engine generator;
-      std::normal_distribution<double> distribution(0.0,StdDev);
-
-      // Count only reachs zero for Convo Layers. 
-      // Count == 0 means this is a call on the bias matrix.
-
-      if (Count == 0) {
-         if (BiasConstant) {
-            w.setConstant(Bias);
-         }
-         else {
-            for (int r = 0; r < w.rows(); r++) {
-               for (int c = 0; c < w.cols(); c++) {
-                  w(r, c) = distribution(generator);
-               }
-            }
+      std::normal_distribution<double> distribution(0.0, stdv);
+      for (int r = 0; r < w.rows(); r++) {
+         for (int c = 0; c < w.cols(); c++) {
+            w(r, c) = distribution(generator);
          }
       }
-      else{
-         for (int r = 0; r < w.rows(); r++) {
-            for (int c = 0; c < w.cols(); c++) {
-               w(r, c) = distribution(generator);
-            }
-         }
-         if (!IsConvoLayer && BiasConstant) {
-            w.rightCols(1).setConstant(Bias);
+   }
+   void ReadConvoBias(Matrix& w, int k) {
+      w.setConstant(0.0);
+   }
+   void ReadFC(Matrix& w){
+      double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.rows() / (double)w.cols()) :  StdDev;
+      std::default_random_engine generator;
+      std::normal_distribution<double> distribution(0.0, stdv);
+      for (int r = 0; r < w.rows(); r++) {
+         for (int c = 0; c < w.cols(); c++) {
+            w(r, c) = distribution(generator);
          }
       }
-      if (IsConvoLayer) { Count--; }
+      // The bias is always set to zero.
+      w.rightCols(1).setConstant(0.0);
    }
 };
 
-class WriteWeightsCSV : public iOutputWeights {
-   string Filename;
-public:
-   WriteWeightsCSV(string file_name) : Filename(file_name) {}
-   bool Write(Matrix& m) {
-      ofstream file(Filename, ios::trunc);
-      if (!file.is_open()) {
-         return false;
+class IOWeightsBinaryFile : public iGetWeights, public iPutWeights{
+   struct MatHeader {
+      int rows;
+      int cols;
+      int step;
+   };
+   string Path;
+   string RootName;
+
+   void Put(Matrix& m, string filename) {
+      ofstream file(filename,  ios::trunc | ios::binary | ios::out );
+      runtime_assert(file.is_open());
+      MatHeader header;
+      header.rows = (int)m.rows();
+      header.cols = (int)m.cols();
+      header.step = sizeof(Matrix::Scalar);
+
+      file.write(reinterpret_cast<char*>(&header), sizeof(MatHeader));
+      // REVIEW: One line storage I got from the internet.  It didn't work.  Don't know why.
+      //file.write(reinterpret_cast<char*>(m.data()), header.step*header.cols*header.rows);
+      for (int r = 0; r < header.rows; r++) {
+         for (int c = 0; c < header.cols; c++) {
+            double v = m(r, c);
+            file.write((char*)&v, sizeof(double));
+         }
       }
+      file.close();
+   }
+
+   void Get(Matrix& m, string filename) {
+      ifstream file(filename, ios::in | ios::binary );
+      runtime_assert(file.is_open());
+
+      MatHeader header;
+      file.read(reinterpret_cast<char*>((&header)), sizeof(MatHeader));
+      runtime_assert(header.step == sizeof(typename Matrix::Scalar));
+      runtime_assert(header.rows == m.rows());
+      runtime_assert(header.cols == m.cols());
+
+      for (int r = 0; r < header.rows; r++) {
+         for (int c = 0; c < header.cols; c++) {
+            double v;
+            file.read((char*)&v, sizeof(double));
+            m(r, c) = v;
+         }
+      }
+      // REVIEW: One line storage I got from the internet.  It didn't work.  Don't know why.
+      //file.read(reinterpret_cast<char*>(m.data()), header.step * header.cols * header.rows);
+
+      file.close();
+   }
+
+public:
+   IOWeightsBinaryFile(string path, string root_name) : RootName(root_name), Path(path) {}
+   void Write(Matrix& m, int k) {
+      string str_count;
+      str_count = to_string(k);
+      string pathname = Path + "\\" + RootName + "." + str_count + ".wts";
+      Put(m,pathname);
+   }
+   void ReadConvoWeight(Matrix& w, int k) {
+      string str_count;
+      str_count = to_string(k);
+      string pathname = Path + "\\" + RootName + "." + str_count + ".wts";
+      Get(w, pathname);
+   }
+   void ReadConvoBias(Matrix& w, int k) {
+      ReadConvoWeight(w, k);
+   }
+   void ReadFC(Matrix& w) {
+      ReadConvoWeight(w, 1);
+   }
+};
+
+class OWeightsCSVFile : public iPutWeights{
+   string Path;
+   string RootName;
+
+   void Put(Matrix& m, string filename) {
+      ofstream file(filename,  ios::trunc | ios::out );
+      runtime_assert(file.is_open());
       int rows = (int)m.rows();
       int cols = (int)m.cols();
       for (int r = 0; r < rows; r++) {
@@ -229,124 +286,19 @@ public:
          file << endl;
       }
       file.close();
-      return true;
    }
-};
 
-class IOWeightsBinary : public iOutputWeights , public iInitWeights{
-   struct MatHeader {
-      int rows;
-      int cols;
-      int step;
-   };
-   string Filename;
-   bool Append;
 public:
-   IOWeightsBinary(string file_name) : Filename(file_name), Append(false) {}
-   IOWeightsBinary(string file_name, bool _append) : Filename(file_name), Append(_append) {}
-   bool Write(Matrix& m) {
-      ofstream file(Filename, (Append ? ios::app : ios::trunc) | ios::binary | ios::out );
-      if (!file.is_open()) {
-         char c[255];
-         strerror_s(c, 255, errno);
-         throw(c);
-         return false;
-      }
-      MatHeader header;
-      header.rows = (int)m.rows();
-      header.cols = (int)m.cols();
-      header.step = sizeof(Matrix::Scalar);
-
-      file.write(reinterpret_cast<char*>(&header), sizeof(MatHeader));
-      //file.write(reinterpret_cast<char*>(m.data()), header.step*header.cols*header.rows);
-      for (int r = 0; r < header.rows; r++) {
-         for (int c = 0; c < header.cols; c++) {
-            double v = m(r, c);
-            file.write((char*)&v, sizeof(double));
-         }
-      }
-      file.close();
-      return true;
-   }
-
-   void Init(Matrix& m) {
-      ifstream file(Filename, ios::in | ios::binary );
-      assert(file.is_open());
-      MatHeader header;
-      file.read(reinterpret_cast<char*>((&header)), sizeof(MatHeader));
-      assert(header.step == sizeof(typename Matrix::Scalar));
-      assert(header.rows == m.rows());
-      assert(header.cols == m.cols());
-
-      for (int r = 0; r < header.rows; r++) {
-         for (int c = 0; c < header.cols; c++) {
-            double v;
-            file.read((char*)&v, sizeof(double));
-            m(r, c) = v;
-         }
-      }
-      //file.read(reinterpret_cast<char*>(m.data()), header.step * header.cols * header.rows);
-
-      file.close();
-   }
-};
-
-class IOMultiWeightsBinary : public iOutputWeights , public iInitWeights{
-   string Path;
-   string RootName;
-   int ReadCount;
-   int WriteCount;
-public:
-   IOMultiWeightsBinary(string path, string root_name) : RootName(root_name), Path(path) {
-      ReadCount = 1;
-      WriteCount = 1;
-   }
-   bool Write(Matrix& m) {
+   OWeightsCSVFile(string path, string root_name) : RootName(root_name), Path(path) {}
+   void Write(Matrix& m, int k) {
       string str_count;
-      str_count = to_string(WriteCount);
-      WriteCount++;
+      str_count = to_string(k);
       string pathname = Path + "\\" + RootName + "." + str_count + ".wts";
-      IOWeightsBinary iow(pathname);
-      iow.Write(m);
-      //cout << "Save " << pathname << endl;
-      //cout << m << endl;
-      return true;
-   }
-
-   void Init(Matrix& m) {
-      string str_count;
-      str_count = to_string(ReadCount);
-      ReadCount++;
-      string pathname = Path + "\\" + RootName + "." + str_count + ".wts";
-
-      IOWeightsBinary iow(pathname);
-      iow.Init(m);
-      //cout << "Read " << pathname << endl;
-      //cout << m << endl;
-   }
-};
-
-class OMultiWeightsCSV : public iOutputWeights{
-   string Path;
-   string RootName;
-   int WriteCount;
-public:
-   OMultiWeightsCSV(string path, string root_name) : RootName(root_name), Path(path) {
-      WriteCount = 1;
-   }
-   bool Write(Matrix& m) {
-      string str_count;
-      str_count = to_string(WriteCount);
-      WriteCount++;
-      string pathname = Path + "\\" + RootName + "." + str_count + ".csv";
-      WriteWeightsCSV iow(pathname);
-      iow.Write(m);
-      //cout << "Save " << pathname << endl;
-      //cout << m << endl;
-      return true;
+      Put(m,pathname);
    }
 };
 //----------------------------------------------------------------
+
 // Activation Functions ------------------------------------------
 
 class actReLU : public iActive {
@@ -573,7 +525,7 @@ public:
    iActive* pActive;
    std::ofstream fout;
    bool bout;
-   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iInitWeights> _pInit, string filename = "") :
+   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit, string filename = "") :
       // Add an extra row to align with the bias weight.
       // This row should always be set to 1.
       X(input_size+1), 
@@ -589,7 +541,7 @@ public:
          throw runtime_error("The activation size and the Layer output size should match.");
       }
 
-      _pInit->Init(W);
+      _pInit->ReadFC(W);
 
       dW.setZero();
       Count = 0;
@@ -648,13 +600,9 @@ public:
       dW.setZero();
    }
 
-   void Save(shared_ptr<iOutputWeights> _pOut) {
-      if (_pOut->Write(W) ){
-         cout << "Weights saved" << endl;
-      }
-      else {
-         cout << "error: weights not saved" << endl;
-      }
+   void Save(shared_ptr<iPutWeights> _pOut) {
+      _pOut->Write(W, 1);
+      cout << "Weights saved" << endl;
    }
 };
 //---------------------------------------------------------------
@@ -686,7 +634,7 @@ public:
    iActive* pActive;
    bool NoBias;
 
-   FilterLayer2D(Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iInitWeights> _pInit, bool no_bias = false ) :
+   FilterLayer2D(Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
       X(input_channels), 
       W(input_channels*kernel_number),
       B(input_channels*kernel_number),
@@ -710,9 +658,9 @@ public:
          m.resize(input_size.rows + input_padding, input_size.cols + input_padding); 
          m.setZero();
       }
-      for (Matrix& m : W) { 
-         m.resize(kernel_size.rows,kernel_size.cols); 
-         _pInit->Init(m);
+      for (int i = 0; i < W.size();i++) {
+         W[i].resize(kernel_size.rows,kernel_size.cols); 
+         _pInit->ReadConvoWeight(W[i],i);
       }
 
       if (NoBias) {
@@ -722,7 +670,10 @@ public:
       }
       else {
          Matrix temp(B.size(), 1);
-         _pInit->Init(temp);
+         // NOTE: The bias matrix "index" as it pertains to the storage system
+         //       is just a continuation of the of the weight index, which ends
+         //       at W.size()-1 .
+         _pInit->ReadConvoBias(temp, (int)W.size() );
          for (int i = 0; i < B.size(); i++) {
             B[i] = temp(i, 0);
          }
@@ -958,19 +909,16 @@ public:
       }
    }
 
-   void Save(shared_ptr<iOutputWeights> _pOut) {
-      for (Matrix& ww : W) {
-         if (!_pOut->Write(ww)) {
-            throw("error: weights not saved");
-         }
+   void Save(shared_ptr<iPutWeights> _pOut) {
+      for (int i = 0; i < W.size(); i++) {
+         _pOut->Write(W[i], i);
       }
       Matrix temp(B.size(), 1);
-      for (int i = 0; i < B.size(); i++){
+      for (int i = 0; i < B.size(); i++) {
          temp(i, 0) = B[i];
       }
-      if (!_pOut->Write(temp)) {
-            throw("error: bias not saved");
-      }
+      _pOut->Write(temp, (int)W.size());
+
       cout << "Weights saved" << endl;
    }
 
@@ -1070,7 +1018,7 @@ public:
    void Update(double eta) 
    {
    }
-   void Save(shared_ptr<iOutputWeights> _pOut) 
+   void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
 };
@@ -1174,7 +1122,7 @@ public:
    void Update(double eta) 
    {
    }
-   void Save(shared_ptr<iOutputWeights> _pOut) 
+   void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
 };
@@ -1296,7 +1244,7 @@ public:
    void Update(double eta) 
    {
    }
-   void Save(shared_ptr<iOutputWeights> _pOut) 
+   void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
 };
@@ -1338,7 +1286,7 @@ public:
    }
    void AvgPool( const vector_of_matrix& g, iColVector& m, Matrix& out )
    {
-      double denominator = rstep * cstep * m.size();
+      double denominator = (double)(rstep * cstep * m.size());
 
       for (int r = 0; r < out.rows(); r++) {
          for (int c = 0; c < out.cols(); c++) {
@@ -1364,7 +1312,7 @@ public:
 
    void BackPool( vector_of_matrix& g, iColVector& m, const Matrix dw )
    {
-      double denominator = rstep * cstep * m.size();
+      double denominator = (double)(rstep * cstep * m.size());
 
       for (int r = 0; r < dw.rows(); r++) {
          for (int c = 0; c < dw.cols(); c++) {
@@ -1408,7 +1356,7 @@ public:
    void Update(double eta) 
    {
    }
-   void Save(shared_ptr<iOutputWeights> _pOut) 
+   void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
 };
@@ -1476,7 +1424,7 @@ public:
    void Update(double eta) 
    {
    }
-   void Save(shared_ptr<iOutputWeights> _pOut) 
+   void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
 };
