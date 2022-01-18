@@ -12,45 +12,10 @@ typedef vector< shared_ptr<Layer> > layer_list;
 typedef vector< shared_ptr<iConvoLayer> > convo_layer_list;
 convo_layer_list ConvoLayerList;
 layer_list LayerList;
-//LossCrossEntropy loss;
-//LossL2 loss;
+
 shared_ptr<iLossLayer> loss;
 string path = "C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\weights";
 string model_name = "layer";
-
-class StatsClassifier
-{
-public:
-   int Correct;
-   int Incorrect;
-   StatsClassifier() : Correct(0), Incorrect(0) {}
-   void Eval(const ColVector& x, const ColVector& y) {
-      assert(x.size() == y.size());
-      int y_max_index = 0;
-      int x_max_index = 0;
-      double xmax = 0.0;
-      double ymax = 0.0;
-      double loss = 0.0;
-      for (int i = 0; i < x.size(); i++) {
-         if (x[i] > xmax) { xmax = x[i]; x_max_index = i; }
-         // This method will handle a y array that is a proper distribution not
-         // just one-hot encoded.
-         if (y[i] > ymax) { ymax = y[i]; y_max_index = i; }
-
-      }
-      if (x_max_index == y_max_index) {
-         Correct++;
-      } else {
-         Incorrect++;
-      }
-      return;
-   }
-   void Reset()
-   {
-      Correct = 0;
-      Incorrect = 0;
-   }
-};
 
 class StatsOutput
 {
@@ -112,6 +77,8 @@ public:
       owf << endl;
    }
 };
+
+
 
 void MakeMNISTImage(string file, Matrix m)
 {
@@ -196,6 +163,21 @@ int GetLabel(ColVector& lv)
    return 0;
 }
 
+class OMultiWeightsBMP : public iPutWeights{
+   string Path;
+   string RootName;
+public:
+   OMultiWeightsBMP(string path, string root_name) : RootName(root_name), Path(path) {}
+   void Write(Matrix& m, int k) {
+      string str_count;
+      str_count = to_string(k);
+      string pathname = Path + "\\" + RootName + "." + str_count + ".bmp";
+      Matrix temp;
+      temp = m;
+      ScaleToOne(temp.data(), (int)temp.size());
+      MakeMNISTImage(pathname, temp);
+   }
+};
 
 //---------------------------------------------------------------------------------
 //                         Big Kernel Method
@@ -281,21 +263,6 @@ public:
    }
 };
 
-class OMultiWeightsBMP : public iPutWeights{
-   string Path;
-   string RootName;
-public:
-   OMultiWeightsBMP(string path, string root_name) : RootName(root_name), Path(path) {}
-   void Write(Matrix& m, int k) {
-      string str_count;
-      str_count = to_string(k);
-      string pathname = Path + "\\" + RootName + "." + str_count + ".bmp";
-      Matrix temp;
-      temp = m;
-      ScaleToOne(temp.data(), (int)temp.size());
-      MakeMNISTImage(pathname, temp);
-   }
-};
 //---------------------------------------------------------------------------------
 void InitBigKernelModel(bool restore)
 {
@@ -318,7 +285,7 @@ void InitBigKernelModel(bool restore)
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new actReLU(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>() ),
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in) ),
                            true) ); // No bias
                       //               dynamic_pointer_cast<iGetWeights>( make_shared<InitBigKernelConvoLayer>()),
 
@@ -338,13 +305,13 @@ void InitBigKernelModel(bool restore)
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in))) );
                                 //     dynamic_pointer_cast<iGetWeights>( make_shared<InitBigKernelFCLayer>())) );
    l++;
 
    // Loss Layer - Not part of network, must be called seperatly.
    // Type: LossCrossEntropy
-   loss = make_shared<LossCrossEntropy>(size_out, 1);   
+   loss = make_shared<LossL2>(size_out, 1);   
    //--------------------------------------------------------------
 
 }
@@ -375,7 +342,7 @@ void InitLeNet5Model( bool restore )
 //                           new actLeakyReLU(size_out * size_out, 0.01), 
                            new actTanh(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in))) );
 
    // Pooling Layer 2
    // Type: AvgPool3D
@@ -421,7 +388,7 @@ void InitLeNet5Model( bool restore )
 //                           new actLeakyReLU(size_out * size_out, 0.01), 
                            new actTanh(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in))) );
 
    // Pooling Layer 4
    // Type: AvgPool3D
@@ -451,7 +418,7 @@ void InitLeNet5Model( bool restore )
 //                           new actLeakyReLU(size_out * size_out, 0.01), 
                            new actTanh(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in))) );
    // Flattening Layer 6
    // Type: Flatten2D
    size_in  = size_out;
@@ -469,7 +436,7 @@ void InitLeNet5Model( bool restore )
    size_out = 84;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actTanh(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );
 
    // Fully Connected Layer 2
    // Type: SoftMAX
@@ -477,7 +444,7 @@ void InitLeNet5Model( bool restore )
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );
 
    // Loss Layer - Not part of network, must be called seperatly.
    loss = make_shared<LossL2>(size_out, 1);   
@@ -607,7 +574,7 @@ void InitLeNet5BModel(bool restore)
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new actLeakyReLU(size_out * size_out,0.01), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );
    l++;
    //---------------------------------------------------------------
  
@@ -634,7 +601,7 @@ void InitLeNet5BModel(bool restore)
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new actLeakyReLU(size_out * size_out,0.01), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );   l++;
    //---------------------------------------------------------------
 
    // Pooling Layer 4 ----------------------------------------------
@@ -666,7 +633,7 @@ void InitLeNet5BModel(bool restore)
    size_out = 512;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actLeakyReLU(size_out,0.01), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );   l++;
    //---------------------------------------------------------------      
 
    // Fully Connected Layer 7 ---------------------------------------
@@ -675,7 +642,7 @@ void InitLeNet5BModel(bool restore)
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );   l++;
    //---------------------------------------------------------------      
 
    // Loss Layer - Not part of network, must be called seperatly.
@@ -704,7 +671,7 @@ void InitAdHockModel(bool restore)
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new actReLU(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );   l++;
    //---------------------------------------------------------------
  
    // Pooling Layer 2 ----------------------------------------------
@@ -762,9 +729,9 @@ void InitAdHockModel(bool restore)
    // Type: ReLU
    size_in = size_out;
    size_out = 84;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new actLeakyReLU(size_out,0.01), 
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, new actReLU(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );   l++;
    //---------------------------------------------------------------      
 
    // Fully Connected Layer 7 ---------------------------------------
@@ -773,18 +740,16 @@ void InitAdHockModel(bool restore)
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToXavier>())) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );   l++;
    //---------------------------------------------------------------      
 
    // Loss Layer - Not part of network, must be called seperatly.
    // Type: LossCrossEntropy
-   loss = make_shared<LossCrossEntropy>(size_out, 1);   
+   loss = make_shared<LossL2>(size_out, 1);   
    //--------------------------------------------------------------
 
 }
 //---------------------------- End InitAdHockModel ---------------------------------------
-
-//5B is working, had to lower the learning rate.  Have a look at the gradients for this configuration.-
 
 typedef void (*InitModelFunction)(bool);
 
@@ -798,12 +763,13 @@ void SaveModelWeights()
 {
    int l = 1;
    for (auto lli : ConvoLayerList) {
-      //lli->Save(make_shared<OMultiWeightsCSV>(path, model_name + "." + to_string(l) ));
+      lli->Save(make_shared<OWeightsCSVFile>(path, model_name + "." + to_string(l) ));
       lli->Save(make_shared<OMultiWeightsBMP>(path, model_name + "." + to_string(l) ));
       lli->Save(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++) ));
    }
    for (const auto& lit : LayerList) {
       lit->Save(make_shared<OWeightsCSVFile>(path, model_name + "." + to_string(l) ));
+      lit->Save(make_shared<OMultiWeightsBMP>(path, model_name + "." + to_string(l) ));
       lit->Save(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++) ));
    }
 }
@@ -1078,7 +1044,6 @@ void TestSave()
 
 void Train(int nloop, string dataroot, double eta, int load)
 {
-   // C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data
    MNISTReader reader(dataroot + "\\train\\train-images-idx3-ubyte",
                       dataroot + "\\train\\train-labels-idx1-ubyte");
 
@@ -1114,14 +1079,25 @@ void Train(int nloop, string dataroot, double eta, int load)
    #define clvgo_write(I,M) ((void)0)
    #define lvgo_write(I,M) ((void)0)
 #endif
+   ErrorOutput err_out(path, model_name);
+
+   const int reader_batch = 1000;  // Should divide into 60K
+   const int batch = 100; // Should divide evenly into reader_batch
+   const int batch_loop = 11;
+
+   std::random_device rd;     // only used once to initialise (seed) engine
+   std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
+   std::uniform_int_distribution<int> uni(0,reader_batch-1); // guaranteed unbiased
+
+
 
    double e = 0;
-  // for (int c = 0; c < 5; c++) {
-      for (int loop = 0; loop < nloop; loop++) {
+   for (int loop = 0; loop < nloop; loop++) {
+      MNISTReader::MNIST_list dl = reader.read_batch(reader_batch);
+      for (int bl = 0; bl < batch_loop; bl++) {
          e = 0;
-         MNISTReader::MNIST_list dl = reader.read_batch(60);
-         //for (int n = 0; n < 10; n++) {
-         for (int n = 0; n < 60; n++) {
+         for (int b = 0; b < batch; b++) {
+            int n = uni(rng); // Select a random entry out of the batch.
             vector_of_matrix m(1);
             m[0].resize(28, 28);
             TrasformMNISTtoMatrix(m[0], dl[n].x);
@@ -1131,7 +1107,6 @@ void Train(int nloop, string dataroot, double eta, int load)
                m = ConvoLayerList[i]->Eval(m);
                clveo_write(i, m);
             }
-            //FilterLayer2D::vecDebugOut("convo_out", m);
 
             ColVector cv;
             cv = LayerList[0]->Eval(m[0].col(0));
@@ -1144,54 +1119,54 @@ void Train(int nloop, string dataroot, double eta, int load)
             double le = loss->Eval(cv, dl[n].y);
             //if (le > e) { e = le; }
             double a = 1.0 / (double)(n + 1);
-            double b = 1.0 - a;
-            e = a * le + b * e;
+            double d = 1.0 - a;
+            e = a * le + d * e;
 
-            vector_of_matrix vm_backprop(1); 
+            vector_of_matrix vm_backprop(1);
             RowVector g = loss->LossGradient();
-            lvgo_write(LayerList.size(),g);
+            lvgo_write(LayerList.size(), g);
             for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
-               if (i==0) {
+               if (i == 0) {
                   vm_backprop[0] = LayerList[i]->BackProp(g);
-                  clvgo_write(i,vm_backprop); // Debug
+                  clvgo_write(i, vm_backprop); // Debug
                }
                else {
                   // REVIEW: Add a visitor interface to BackProp that can be used
                   //         to produce metric's such as scale of dW.
                   g = LayerList[i]->BackProp(g);
-                  lvgo_write(i,g); // Debug
+                  lvgo_write(i, g); // Debug
                }
             }
 
             for (int i = (int)ConvoLayerList.size() - 1; i >= 0; --i) {
-               if (i==0) {
-                  ConvoLayerList[i]->BackProp(vm_backprop,false);
-                  clvgo_write( i, dynamic_pointer_cast<FilterLayer2D>( ConvoLayerList[i] )->dW );  // Debug
+               if (i == 0) {
+                  ConvoLayerList[i]->BackProp(vm_backprop, false);
+                  clvgo_write(i, dynamic_pointer_cast<FilterLayer2D>(ConvoLayerList[i])->dW);  // Debug
                }
                else {
                   vm_backprop = ConvoLayerList[i]->BackProp(vm_backprop);
-                  clvgo_write(i,vm_backprop); // Debug
+                  clvgo_write(i, vm_backprop); // Debug
                }
-            }   
+            }
 
             //eta = (1.0 / (1.0 + 0.001 * loop)) * eta;
             for (auto lli : ConvoLayerList) {
                lli->Update(eta);
-               }
+            }
             for (auto lit : LayerList) {
                lit->Update(eta);
             }
 
          }
-
+         err_out.Write(e);
          cout << "count: " << loop << " error:" << e << endl;
       }
-   //}
+   }
 
    MNISTReader reader1( dataroot + "\\test\\t10k-images-idx3-ubyte",
                         dataroot + "\\test\\t10k-labels-idx1-ubyte");
 
-   StatsClassifier stat_class;
+   LossClassifierStats stat_class;
 
    ColVector X;
    ColVector Y;
@@ -1238,7 +1213,7 @@ void Test(string dataroot)
    MNISTReader reader(dataroot + "\\test\\t10k-images-idx3-ubyte",
                       dataroot + "\\test\\t10k-labels-idx1-ubyte");
 
-   StatsClassifier stat_class;
+   LossClassifierStats stat_class;
 
    ColVector X;
    ColVector Y;
@@ -1312,7 +1287,7 @@ int main(int argc, char* argv[])
       }
    }
    catch (std::exception ex) {
-      cout << "Error:/n" << ex.what() << endl;
+      cout << "Error:\n" << ex.what() << endl;
    }
 
    //char c;

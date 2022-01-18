@@ -9,7 +9,7 @@
 
 typedef vector< shared_ptr<Layer> > layer_list;
 layer_list LayerList;
-LossCrossEntropy loss;
+shared_ptr<iLossLayer> loss;
 
 string path = "C:\\projects\\neuralnet\\simplenet\\SNMNIST\\weights";
 string model_name = "layer";
@@ -18,8 +18,8 @@ void SaveModelWeights()
 {
    int l = 1;
    for (const auto& lit : LayerList) {
-      lit->Save(make_shared<OMultiWeightsCSV>(path, model_name + "." + to_string(l) ));
-      lit->Save(make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l++) ));
+      lit->Save(make_shared<OWeightsCSVFile>(path, model_name + "." + to_string(l) ));
+      lit->Save(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++) ));
    }
 }
 
@@ -35,9 +35,8 @@ void InitFCModel(bool restore)
 
    int l = 1; // Layer counter
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actReLU(size_out),
-                 restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
-                           dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
-                           //dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToConstants>(0.1,0.0))) );
+                 restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
+                           dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );
    l++;
 
    // FC Layer 2 -----------------------------------------
@@ -45,11 +44,11 @@ void InitFCModel(bool restore)
    size_in  = size_out;
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out),
-                 restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
-                           dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandom>(0.1,0.0))) );
-                           //dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToConstants>(0.1,0.0))) );
+                 restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
+                           dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );
+   l++;
 
-   loss.Init(size_out, 1);
+   loss = make_shared<LossL2>(size_out, 1);   
 }
 
 typedef void (*InitModelFunction)(bool);
@@ -61,7 +60,7 @@ InitModelFunction InitModel = InitFCModel;
    for (auto lli : LayerList) {\
       cv = lli->Eval(cv);\
    }\
-   e = loss.Eval(cv, dl[n].y);\
+   e = loss->Eval(cv, dl[n].y);\
 }
 
 void TestGradComp()
@@ -96,7 +95,7 @@ void TestGradComp()
 
          LayerList[0]->W(r, c) = w1;
          COMPUTE_LOSS
-         RowVector g = loss.LossGradient();
+         RowVector g = loss->LossGradient();
          for (int i = LayerList.size() - 1; i >= 0; --i) {
             LayerList[i]->Count = 0;
             g = LayerList[i]->BackProp(g);
@@ -165,10 +164,10 @@ void MakeTrendErrorFunction( int r, int c, string fileroot )
       LayerList[0]->W(r,c) = w0[i];
       cv = dl[n].x;
       for (auto lli : LayerList) { cv = lli->Eval(cv); }
-      f(i) = loss.Eval(cv, dl[n].y);
+      f(i) = loss->Eval(cv, dl[n].y);
 
       LayerList[0]->Count = 0;
-      RowVector g = loss.LossGradient();
+      RowVector g = loss->LossGradient();
       for (int i = LayerList.size() - 1; i >= 0; --i) {
          g = LayerList[i]->BackProp(g);
       } 
@@ -183,12 +182,15 @@ void MakeTrendErrorFunction( int r, int c, string fileroot )
    odwf.close();
 }
 
-void Train( int nloop )
+void Train( int nloop, string dataroot, double eta, int load )
 {
-   InitModel(false);
+   MNISTReader reader(dataroot + "\\train\\train-images-idx3-ubyte",
+                      dataroot + "\\train\\train-labels-idx1-ubyte");
 
-   MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-images-idx3-ubyte",
-      "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-labels-idx1-ubyte");
+   InitModel(load > 0 ? true : false);
+   ErrorOutput err_out(path, model_name);
+   LossClassifierStats stat_class;
+
    ColVector X;
    ColVector Y;
    double avg_e = 0.0;
@@ -196,40 +198,42 @@ void Train( int nloop )
    for (int loop = 1; loop < nloop; loop++) {
       MNISTReader::MNIST_list dl = reader.read_batch(60);
       auto start = chrono::steady_clock::now();
-      for (int k = 1; k <= 3; k++) {
-         for (auto& dli : dl) {
-            X = dli.x;
-            for (const auto& lit : LayerList) {
-               X = lit->Eval(X);
-            }
-            double error = loss.Eval(X, dli.y);
-            double a = 1.0 / (double)loop;
-            double b = 1 - a;
-            avg_e = a * error + b * avg_e;
-
-            //cout << "------ Error: " << error << "------------" << endl;
-            RowVector g = loss.LossGradient();
-
-            for (layer_list::reverse_iterator riter = LayerList.rbegin();
-               riter != LayerList.rend();
-               riter++) {
-               g = (*riter)->BackProp(g);
-            }
-         }
+      for (auto& dli : dl) {
+         X = dli.x;
          for (const auto& lit : LayerList) {
-            double eta = 1.0;
-            lit->Update(eta);
+            X = lit->Eval(X);
+         }
+         double error = loss->Eval(X, dli.y);
+         stat_class.Eval(X, dli.y);
+         double a = 1.0 / (double)loop;
+         double b = 1 - a;
+         avg_e = a * error + b * avg_e;
+
+         //cout << "------ Error: " << error << "------------" << endl;
+         RowVector g = loss->LossGradient();
+
+         for (layer_list::reverse_iterator riter = LayerList.rbegin();
+            riter != LayerList.rend();
+            riter++) {
+            g = (*riter)->BackProp(g);
          }
       }
+
+      for (const auto& lit : LayerList) {
+         double eta = 1.0;
+         lit->Update(eta);
+      }
+      
+      err_out.Write(avg_e);
       auto end = chrono::steady_clock::now();
       auto diff = end - start;
       //std::cout << std::setprecision(3) << avg_e << endl;
-      std::cout << "avg error: " << std::setprecision(3) << avg_e << " correct/incorrect " << loss.Correct << " , " << loss.Incorrect << " Compute time: " << chrono::duration <double, milli>(diff).count() << " ms" << endl;
+      std::cout << "avg error: " << std::setprecision(3) << avg_e << " correct/incorrect " << stat_class.Correct << " , " << stat_class.Incorrect << " Compute time: " << chrono::duration <double, milli>(diff).count() << " ms" << endl;
       int l = 1;
       for (const auto& lit : LayerList) {
          cout << "L " << l++ << "W: " << lit->W.cwiseAbs().maxCoeff() << endl;
       }
-      loss.ResetCounters();
+      stat_class.Reset();
    }
    
    std::cout << "Save? y/n:  ";
@@ -241,13 +245,15 @@ void Train( int nloop )
    
 }
 
-void Test()
+void Test(string dataroot)
 {
    InitModel(true);
 
-   MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\test\\t10k-images-idx3-ubyte",
-      "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\test\\t10k-labels-idx1-ubyte");
-   ColVector X;
+   MNISTReader reader(dataroot + "\\test\\t10k-images-idx3-ubyte",
+                      dataroot + "\\test\\t10k-labels-idx1-ubyte");
+
+   LossClassifierStats stat_class;   ColVector X;
+
    ColVector Y;
    double avg_e = 0.0;
    int count = 0;
@@ -258,32 +264,48 @@ void Test()
       for (const auto& lit : LayerList) {
          X = lit->Eval(X);
       }
-      double error = loss.Eval(X, Y);
-      /*
-      if (++count == 10) {
-         count = 0;
-         std::cout << " correct/incorrect " << loss.Correct << " , " << loss.Incorrect << endl;
-      }
-      */
+      double error = loss->Eval(X, Y);
+      stat_class.Eval(X, Y);
    }
-   std::cout << " correct/incorrect " << loss.Correct << " , " << loss.Incorrect << endl;
+   std::cout << " correct/incorrect " << stat_class.Correct << " , " << stat_class.Incorrect << endl;
 }
 
 int main(int argc, char* argv[])
 {
    std::cout << "Starting simpleMNIST\n";
+   try{
+      string dataroot = "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data";
 
-   //TestGradComp();
-   MakeTrendErrorFunction(11, 156, "C:\\projects\\neuralnet\\simplenet\\SNMNIST\\weights\\trend");
-   exit(0);
+      //TestGradComp();
+      //MakeTrendErrorFunction(11, 156, "C:\\projects\\neuralnet\\simplenet\\SNMNIST\\weights\\trend");
+      //exit(0);
 
-   if (argc > 0 && string(argv[1]) == "train") {
-      Train( atoi(argv[2]) );  
+      if (argc > 1 && string(argv[1]) == "train") {
+         if (argc < 3) {
+            cout << "Not enough parameters.  Parameters: train | batches | eta | read stored coefs (0|1) [optional] | dataroot [optional] | path [optional]" << endl;
+            return 0;
+         }
+         double eta = atof(argv[3]);
+         int load = 0;
+         if (argc > 4) { load = atoi(argv[4]); }
+         if (argc > 5) { dataroot = argv[5]; }
+         if (argc > 6) { path = argv[6]; }
+
+         Train(atoi(argv[2]), dataroot, eta, load);
+      }
+      else {
+         if (argc > 1) {
+            dataroot = argv[1];
+            path = argv[2];
+         }
+         else {
+            dataroot = "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data";
+         }
+         Test(dataroot);
+      }
    }
-   else {
-      Test();
+   catch (std::exception ex) {
+      cout << "Error:\n" << ex.what() << endl;
    }
-
-
 }
 

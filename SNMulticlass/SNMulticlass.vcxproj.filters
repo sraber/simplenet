@@ -18,7 +18,7 @@
     <ClCompile Include="SNMulticlass.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="bmp.cpp">
+    <ClCompile Include="..\bmp.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

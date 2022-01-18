@@ -69,8 +69,8 @@ int main(int argc, char* argv[])
    MakePointRing(points, 0.0, 0.0, 9, 2, k, 40);
 
    //------------ setup the network ------------------------------
-   LayerList.push_back(make_shared<Layer>(2, 10, new actSigmoid(10), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-   LayerList.push_back(make_shared<Layer>(10, k, new actSoftMax(k), make_shared<InitWeightsToRandom>(0.1, 0.0)));
+   LayerList.push_back(make_shared<Layer>(2, 10, new actSigmoid(10), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(10, k, new actSoftMax(k), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
 
    LossCrossEntropy loss(k, 1);
    //-------------------------------------------------------------

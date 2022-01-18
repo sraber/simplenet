@@ -7,6 +7,7 @@
 #include <list>
 #include <stdexcept>
 #include <random>
+#include <functional>
 
 //#define TRACE
 #ifdef TRACE
@@ -163,13 +164,40 @@ public:
    }
 };
 
-class IWeightsToXavier : public iGetWeights {
+class IWeightsToNormDist : public iGetWeights {
    double StdDev;
+   int Channels;
+   /*
+   Delving Deep into Rectifiers:
+Surpassing Human-Level Performance on ImageNet Classification
+   * */
+   std::function<double(double, double, int)> stdv_Kaiming = [](double r, double c, int k) {
+      return sqrt( 2.0 / (r * c * (double)k) );
+   };
+   std::function<double(double, double, int)> stdv_Xavier = [](double r, double c, int k) {
+      return sqrt(6 / (r + c));
+   };
+
+   std::function<double(double, double, int)> fstdv;
 public:
-   IWeightsToXavier() : StdDev(-1.0) {}
-   IWeightsToXavier(double std_dev) : StdDev(std_dev) {}
+   enum InitType{
+      Xavier,
+      Kanning
+   };
+   IWeightsToNormDist(double std_dev) : StdDev(std_dev) {
+      // Not used in this mode but we should init fstdv to something.
+      fstdv = stdv_Xavier;
+   }
+   IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0) {
+      switch(init_type) {
+         case Xavier:      fstdv = stdv_Xavier; break;
+         case Kanning:     fstdv = stdv_Kaiming; break;
+         default:          fstdv = stdv_Xavier;
+      }
+   }
    void ReadConvoWeight(Matrix& w, int k) {
-      double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.rows() / (double)w.cols()) :  StdDev;
+      //double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)(w.rows() * w.cols())) :  StdDev;
+      double stdv = StdDev < 0.0 ? fstdv((double)w.rows(),(double)w.cols(),Channels) :  StdDev;
       std::default_random_engine generator;
       std::normal_distribution<double> distribution(0.0, stdv);
       for (int r = 0; r < w.rows(); r++) {
@@ -182,7 +210,7 @@ public:
       w.setConstant(0.0);
    }
    void ReadFC(Matrix& w){
-      double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.rows() / (double)w.cols()) :  StdDev;
+      double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.cols()) :  StdDev;
       std::default_random_engine generator;
       std::normal_distribution<double> distribution(0.0, stdv);
       for (int r = 0; r < w.rows(); r++) {
@@ -293,7 +321,7 @@ public:
    void Write(Matrix& m, int k) {
       string str_count;
       str_count = to_string(k);
-      string pathname = Path + "\\" + RootName + "." + str_count + ".wts";
+      string pathname = Path + "\\" + RootName + "." + str_count + ".csv";
       Put(m,pathname);
    }
 };
@@ -767,24 +795,10 @@ public:
       }
    }
 
-   static void vecDebugOut(string label, vector_of_matrix vom)
-   {
-      return;  // !!!!!! NOTE !!!!!!!!
-      cout << label << endl;
-      int count = 0;
-      for (Matrix& m : vom) {
-         count++;
-         cout << "mat max" << count << ": " << m.maxCoeff() << endl;
-      }
-   }
-
    vector_of_matrix Eval(const vector_of_matrix& _x) 
    {
       vecSetXValue(X, _x);
       vecLinearCorrelate();
-      vecDebugOut("X", X);
-      vecDebugOut("W", W);
-      vecDebugOut("Z", Z);
       vector_of_matrix vecOut(Z.size());
       for (Matrix& mm : vecOut) { mm.resize(OutputSize.rows, OutputSize.cols); }
       vector_of_matrix::iterator iz = Z.begin();
@@ -795,9 +809,7 @@ public:
          Eigen::Map<ColVector> z(iz->data(), iz->size());
          Eigen::Map<ColVector> v(io->data(), io->size());
          v = pActive->Eval(z);
-         //v = pActive->Eval(iz->data(), iz->size() );
       }
-      vecDebugOut("vecOut", vecOut);
       return vecOut;
    }
 
@@ -1470,13 +1482,9 @@ public:
    ColVector Y;
    RowVector G;
 
-   int Correct;
-   int Incorrect;
    LossCrossEntropy() 
    {
       Size = 0;
-      Correct = 0;
-      Incorrect = 0;
    }
 
    LossCrossEntropy(int input_size, int output_size) :
@@ -1485,8 +1493,6 @@ public:
       G(input_size),
       Size(input_size)
    {
-      Correct = 0;
-      Incorrect = 0;
    }
 
    void Init(int input_size, int output_size) {
@@ -1494,34 +1500,19 @@ public:
       Y.resize(input_size),
       G.resize(input_size),
       Size = input_size;
-      Correct = 0;
-      Incorrect = 0;
    }
 
    Number Eval(const ColVector& x, const ColVector& y) {
       assert(Size > 0);
       X = x;
       Y = y;
-      int y_max_index = 0;
-      int x_max_index = 0;
-      double xmax = 0.0;
-      double ymax = 0.0;
       double loss = 0.0;
       for (int i = 0; i < Size; i++) {
-         if (x[i] > xmax) { xmax = x[i]; x_max_index = i; }
-         // This method will handle a y array that is a proper distribution not
-         // just one-hot encoded.
-         if (y[i] > ymax) { ymax = y[i]; y_max_index = i; }
          // No reason to evaulate this expression if y[i]==0.0 .
          if (y[i] != 0.0) {
             //                        Prevent undefined results when taking the log of 0
             loss -= y[i] * std::log( std::max(x[i], std::numeric_limits<Number>::epsilon()));
          }
-      }
-      if (x_max_index == y_max_index) {
-         Correct++;
-      } else {
-         Incorrect++;
       }
       return loss;
    }
@@ -1544,15 +1535,55 @@ public:
             G[i] = -Y[i] / X[i];
          }
       }
-      #ifdef TRACE
-      cout << "Loss gradiant: " << G << endl;
-      #endif
       return G;
    }
+};
 
-   void ResetCounters()
+class LossClassifierStats
+{
+public:
+   int Correct;
+   int Incorrect;
+   LossClassifierStats() : Correct(0), Incorrect(0) {}
+   void Eval(const ColVector& x, const ColVector& y) {
+      assert(x.size() == y.size());
+      int y_max_index = 0;
+      int x_max_index = 0;
+      double xmax = 0.0;
+      double ymax = 0.0;
+      double loss = 0.0;
+      for (int i = 0; i < x.size(); i++) {
+         if (x[i] > xmax) { xmax = x[i]; x_max_index = i; }
+         // This method will handle a y array that is a proper distribution not
+         // just one-hot encoded.
+         if (y[i] > ymax) { ymax = y[i]; y_max_index = i; }
+
+      }
+      if (x_max_index == y_max_index) {
+         Correct++;
+      } else {
+         Incorrect++;
+      }
+      return;
+   }
+   void Reset()
    {
       Correct = 0;
       Incorrect = 0;
    }
 };
+
+   class ErrorOutput
+   {
+      ofstream owf;
+   public:
+      ErrorOutput(string path, string name) : owf(path + "\\" + name + ".error.csv", ios::trunc)
+      {
+         // Not usually nice to throw an error out of a constructor.
+         runtime_assert(owf.is_open());
+      }
+      void Write(double e)
+      {
+         owf << e << endl;
+      }
+   };
