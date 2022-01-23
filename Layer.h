@@ -175,7 +175,7 @@ Surpassing Human-Level Performance on ImageNet Classification
       return sqrt( 2.0 / (r * c * (double)k) );
    };
    std::function<double(double, double, int)> stdv_Xavier = [](double r, double c, int k) {
-      return sqrt(6 / (r + c));
+      return sqrt(6.0 / (r + c));
    };
 
    std::function<double(double, double, int)> fstdv;
@@ -483,7 +483,6 @@ public:
    }
 
    Matrix Jacobian(const ColVector& q) {
-      //cout << "Softmax q: " << q << endl;
       for (int r = 0; r < Size; r++) {
          for (int c = 0; c < Size; c++) {
             if (r == c) {

@@ -676,6 +676,7 @@ void InitAdHockModel(bool restore)
  
    // Pooling Layer 2 ----------------------------------------------
    // Type: MaxPool2D
+   /*
    size_in  = size_out;
    size_out = 7;
    chn_in = chn_out;
@@ -683,6 +684,7 @@ void InitAdHockModel(bool restore)
    assert(!(size_in % size_out));
    ConvoLayerList.push_back(make_shared<MaxPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
+   */
    //---------------------------------------------------------------
    /*
    // Convolution Layer 3 -----------------------------------------
@@ -745,7 +747,7 @@ void InitAdHockModel(bool restore)
 
    // Loss Layer - Not part of network, must be called seperatly.
    // Type: LossCrossEntropy
-   loss = make_shared<LossL2>(size_out, 1);   
+   loss = make_shared<LossCrossEntropy>(size_out, 1);   
    //--------------------------------------------------------------
 
 }
@@ -1088,8 +1090,6 @@ void Train(int nloop, string dataroot, double eta, int load)
    std::random_device rd;     // only used once to initialise (seed) engine
    std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
    std::uniform_int_distribution<int> uni(0,reader_batch-1); // guaranteed unbiased
-
-
 
    double e = 0;
    for (int loop = 0; loop < nloop; loop++) {
