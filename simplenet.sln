@@ -15,6 +15,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SNCVMNIST", "SNCVMNIST\SNCV
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "algors", "algors\algors.vcxproj", "{7B1C774B-FEB8-4011-B5E5-7B18F384C350}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SmartCor", "SmartCor\SmartCor.vcxproj", "{440AAB0A-F251-4A78-AA39-F7927183141F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -71,6 +73,14 @@ Global
 		{7B1C774B-FEB8-4011-B5E5-7B18F384C350}.Release|x64.Build.0 = Release|x64
 		{7B1C774B-FEB8-4011-B5E5-7B18F384C350}.Release|x86.ActiveCfg = Release|Win32
 		{7B1C774B-FEB8-4011-B5E5-7B18F384C350}.Release|x86.Build.0 = Release|Win32
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Debug|x64.ActiveCfg = Debug|x64
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Debug|x64.Build.0 = Debug|x64
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Debug|x86.ActiveCfg = Debug|Win32
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Debug|x86.Build.0 = Debug|Win32
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Release|x64.ActiveCfg = Release|x64
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Release|x64.Build.0 = Release|x64
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Release|x86.ActiveCfg = Release|Win32
+		{440AAB0A-F251-4A78-AA39-F7927183141F}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

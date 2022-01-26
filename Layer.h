@@ -184,11 +184,11 @@ public:
       Xavier,
       Kanning
    };
-   IWeightsToNormDist(double std_dev) : StdDev(std_dev) {
+   IWeightsToNormDist(double std_dev) : StdDev(std_dev), Channels(-1) {
       // Not used in this mode but we should init fstdv to something.
       fstdv = stdv_Xavier;
    }
-   IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0) {
+   IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0), Channels(channels) {
       switch(init_type) {
          case Xavier:      fstdv = stdv_Xavier; break;
          case Kanning:     fstdv = stdv_Kaiming; break;
@@ -603,9 +603,6 @@ public:
       double b = 1.0 - a;
       dW = a * iter_w_grad + b * dW;
       if (want_layer_grad) {
-         // REVIEW: Performance issue??  The block method seems like less multiplications,
-         //         unless it has to do a copy.
-         //return (layer_grad * W).leftCols(InputSize);
          return (delta_grad * W.block(0,0,OutputSize, InputSize));
       }
       else {
@@ -1524,7 +1521,10 @@ public:
                G[i] = 0.0;
             }
             else {
-               G[i] = -10.0;
+               //G[i] = -10.0;
+               // This may be the wrong value, but it is safe.  The worst it does is that
+               // it does not progress the solution.
+               G[i] = 0.0;
                cout << "Loss Gradient encountered div by zero" << endl; // Debug
             }
             //G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);

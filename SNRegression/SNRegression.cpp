@@ -60,7 +60,7 @@ layer_list LayerList;
 void TestMPG(void)
 {
    LayerList.push_back(make_shared<Layer>(1, 1, new actLinear(1),
-      make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNRegression\\SNRegress.1.wts") ));
+      make_shared<IOWeightsBinaryFile>("C:\\projects\\neuralnet\\simplenet\\SNRegression\\SNRegress.1.wts") ));
 
    ColVector X(1);
    X(0) = -0.5;

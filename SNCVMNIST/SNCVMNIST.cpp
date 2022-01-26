@@ -80,7 +80,7 @@ public:
 
 
 
-void MakeMNISTImage(string file, Matrix m)
+void MakeMatrixImage(string file, Matrix m)
 {
    pixel_data pixel;
    int rows = (int)m.rows();
@@ -175,7 +175,7 @@ public:
       Matrix temp;
       temp = m;
       ScaleToOne(temp.data(), (int)temp.size());
-      MakeMNISTImage(pathname, temp);
+      MakeMatrixImage(pathname, temp);
    }
 };
 
@@ -246,7 +246,7 @@ public:
          int r2 = r * r;
          for (int c = 0; c < 14; c++) {
             int c2 = c * c;
-            if ((r2 * r2 + c2 * c2) <= pass_rad2) {
+            if ((r2 + c2) <= pass_rad2) {
                pass_field(r, c) = 0.01;
             }
          }
@@ -1174,7 +1174,6 @@ void Train(int nloop, string dataroot, double eta, int load)
    double avg_e = 0.0;
    int count = 0;
 
-  // loss.ResetCounters();  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    while (reader1.read_next()) {
       X = reader1.data();
       Y = reader1.label();
@@ -1289,7 +1288,4 @@ int main(int argc, char* argv[])
    catch (std::exception ex) {
       cout << "Error:\n" << ex.what() << endl;
    }
-
-   //char c;
-   //cin >> c;
 }
