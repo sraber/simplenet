@@ -16,7 +16,76 @@ shared_ptr<iLossLayer> loss;
 string path = "C:\\projects\\neuralnet\\simplenet\\SmartCor\\weights";
 string model_name = "layer";
 
-void CreatePattern(Matrix& m, double ro2, double co2, double radius);
+void Normalize(Matrix& m)
+{
+   double u = m.sum();
+   u /= (double)m.size();
+
+   m.array() = m.array() - u;
+
+   double std = 0.0;
+   for (int r = 0; r < m.rows(); r++) {
+      for (int c = 0; c < m.cols(); c++) {
+         std += m(r, c) * m(r, c);
+      }
+   }
+   std = sqrt( std / (double)m.size());
+
+   m.array() /= std;
+}
+
+void CreateCone(Matrix& m, double ro2, double co2, double radius)
+{
+   for (int r = 0; r < m.rows(); r++) {
+      double rc = r - ro2;
+      double r2 = rc * rc;
+      for (int c = 0; c < m.cols(); c++) {
+         double cc = c - co2;
+         double c2 = cc * cc;
+         double cur_radius = sqrt((double)(r2 + c2));
+         if (cur_radius < radius) {
+            // Amplitude of 0 at radius rising to 1 at center.  It's a cone.
+            m(r, c) = 1.0 - cur_radius / radius;
+         }
+      }
+   }
+}
+
+void CreateCylinder(Matrix& m, double ro2, double co2, double radius)
+{
+   m.setZero();
+   double pass_rad2 = radius * radius;
+   for (int r = 0; r < m.rows(); r++) {
+      double rc = r - ro2;
+      double r2 = rc * rc;
+      for (int c = 0; c < m.cols(); c++) {
+         double cc = c - co2;
+         double c2 = cc * cc;
+         if ((r2 + c2) < pass_rad2) {
+
+            m(r, c) = 1.0;
+         }
+      }
+   }
+}
+
+void CreateNormalDistribution(Matrix& m, double ro2, double co2, double std)
+{
+   const double den = 0.39894;  // 1/sqrt(2 pi)  need more sig digites
+   double a = den / std;
+   m.setZero();
+   for (int r = 0; r < m.rows(); r++) {
+      double rc = r - ro2;
+      double r2 = rc * rc;
+      for (int c = 0; c < m.cols(); c++) {
+         double cc = c - co2;
+         double c2 = cc * cc;
+         double cur_radius = sqrt((double)(r2 + c2));
+         double b = cur_radius / std;
+         m(r, c) = 10.0 * a * exp(-0.5 * b * b);
+      }
+   }
+}
 
 class StatsOutput
 {
@@ -134,9 +203,9 @@ public:
 
 class SmartCorStats
 {
-   int Center;
+   double Center;
    double Threshold;
-   const double acceptable_error_sqd = 2.0 * 2.0; // This is pixels.
+   const double acceptable_error = 4.0; // This is pixels.
 public:
    int Correct;
    int Incorrect;
@@ -156,8 +225,11 @@ public:
             }
          }
       }
+      double dr = (double)rm - Center;
+      double dc = (double)cm - Center;
+      double err = sqrt(dr * dr + dc * dc);
       if (exceeded_threshold==is_pattern &&
-          (rm*rm+cm*cm)<=acceptable_error_sqd ){
+          err<=acceptable_error ){
          Correct++;
       } else {
          Incorrect++;
@@ -180,8 +252,9 @@ class InitSmartCorConvoLayer : public iGetWeights{
 public:
    InitSmartCorConvoLayer(int _size, int _center) : Size(_size), Center(_center){}
    void ReadConvoWeight(Matrix& m, int k) {
-      CreatePattern(m, Center, Center, Size / 4);
-      m *= 0.01;
+      //CreateCone(m, Center, Center, Size / 4);
+      CreateCylinder(m, Center, Center, Size / 4);
+      Normalize(m);
    }
    void ReadConvoBias(Matrix& w, int k) {
       w.setZero();
@@ -209,10 +282,11 @@ void InitSmartCorA(bool restore)
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
-                           new actTanh(size_out * size_out), 
+                           //new actTanh(size_out * size_out), 
+                           new actLinear(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
-                                     //dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, (double)(pattern_size + 1) / 2.0)),
+                                     //dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center)),
                            true )
                            );
    l++;
@@ -323,25 +397,6 @@ void SaveModelWeights()
    }
 }
 
-void CreatePattern(Matrix& m, double ro2, double co2, double radius)
-{
-   m.setZero();
-   int pass_rad2 = radius * radius;
-   for (int r = 0; r < m.rows(); r++) {
-      int rc = r - ro2;
-      int r2 = rc * rc;
-      for (int c = 0; c < m.cols(); c++) {
-         int cc = c - co2;
-         int c2 = cc * cc;
-         if ((r2 + c2) < pass_rad2) {
-            double cur_radius = sqrt((double)(r2 + c2));
-            // Amplitude of 0 at radius rising to 1 at center.  It's a cone.
-            m(r, c) = 1.0 - cur_radius / radius;
-         }
-      }
-   }
-}
-
 //std::random_device rd;
 //std::mt19937 rng(rd());
 //std::uniform_real_distribution<double> und_low(-1.0,0.0);
@@ -360,16 +415,6 @@ void CreatePattern(Matrix& m, double ro2, double co2, double radius)
 //   }
 //}
 
-   void cwiseDiv(double* t, double* s, int size)
-   {
-      double* te = t + size;
-      for (; t < te; t++, s++) {
-         if (*s > 0.0) {
-            *t /= *s;
-         }
-      }
-   }
-
 //vector_of_matrix CreateBatch(int size)
 //{
 //   const double rad_small = (double)pattern_size / 8.0;
@@ -387,7 +432,7 @@ void CreatePattern(Matrix& m, double ro2, double co2, double radius)
 //   double g = (rad_big - rad_small) / (double)(size - 1);
 //   for (int i = 0; i < size; i++) {
 //      double r = (double)i * g + rad_small;
-//      CreatePattern(vom[i], pattern_center, pattern_center, r);
+//      CreateCone(vom[i], pattern_center, pattern_center, r);
 //      sum += vom[i];
 //   }
 //
@@ -414,12 +459,10 @@ void CreatePattern(Matrix& m, double ro2, double co2, double radius)
 //   return vom;
 //}
 
-vector_of_matrix CreateBatch(int size)
+vector_of_matrix CreateBatch(int size, int what )
 {
    const double rad_small = (double)pattern_size / 8.0;
    const double rad_big = (double)pattern_size / 2.0;
-
-   double sum = 0.0;
 
    vector_of_matrix vom(size);
    for (Matrix& m : vom) { m.resize(pattern_size, pattern_size); }
@@ -427,19 +470,18 @@ vector_of_matrix CreateBatch(int size)
    double g = (rad_big - rad_small) / (double)(size - 1);
    for (int i = 0; i < size; i++) {
       double r = (double)i * g + rad_small;
-      CreatePattern(vom[i], pattern_center, pattern_center, r);
-      sum += vom[i].mean();
-   }
+      switch (what) {
+      case 1:
+         CreateCone(vom[i], pattern_center, pattern_center, r);
+         break;
+      case 2:
+         CreateCylinder(vom[i], pattern_center, pattern_center, r);
+         break;
+      default:
+         throw runtime_error("incorrect object number.");
+      }
 
-   sum /= (double)size;
-
-   //cout << std << endl;
-
-   for (Matrix& m : vom) {
-      m.array() -= sum; // sum is now average.
-      //cwiseDiv(m.data(), std.data(), m.size());
-
-      //cout << m << endl;
+      Normalize(vom[i]);
    }
    
    return vom;
@@ -453,10 +495,8 @@ void Train(int nloop, double eta, int load)
    Matrix y_pattern(pattern_size, pattern_size);
    Matrix y_noise(pattern_size, pattern_size);
 
-   y_pattern.setZero();
-   y_pattern((int)(center + 0.5), (int)(center + 0.5)) = 1.0;
-
-   y_noise.setConstant( 1.0 / (double)(pattern_size * pattern_size));
+   CreateNormalDistribution(y_pattern, pattern_center, pattern_center, 2.0);
+   y_noise.setConstant( 0.0);
 
    Matrix& y = y_pattern;
 
@@ -484,8 +524,8 @@ void Train(int nloop, double eta, int load)
    //std::uniform_real_distribution<double> unr(pattern_size/8,pattern_size/2); // guaranteed unbiased
    //std::uniform_int_distribution<int> uni(1, 10);
 
-   const int batch_size = 100;
-   vector_of_matrix batch = CreateBatch(batch_size);
+   const int batch_size = 20;
+   vector_of_matrix batch = CreateBatch(batch_size, 2);
 
    for (int loop = 0; loop < nloop; loop++) {
       //if (uni(rng) == 10) {
@@ -493,8 +533,8 @@ void Train(int nloop, double eta, int load)
       //   y = y_noise;
       //}
       //else {
-      //   CreatePattern(m[0], center, center, unr(rng));
-      //   //CreatePattern(m[0], center, center, pattern_size/4);
+      //   CreateCone(m[0], center, center, unr(rng));
+      //   //CreateCone(m[0], center, center, pattern_size/4);
       //   y = y_pattern;
       //}
       double e = 0;
@@ -563,8 +603,6 @@ void Train(int nloop, double eta, int load)
 
       err_out.Write(e);
       cout << "count: " << loop << " error:" << e << endl;
-
-
    }
 
    SmartCorStats stat_class(pattern_center, 0.000001);
@@ -600,16 +638,18 @@ void Train(int nloop, double eta, int load)
    }
 }
 
-void Test()
+void Test(int what)
 {
+   cout << "Starting test" << endl << "path: " << path << endl << "test obj: " << what << endl;
    InitModel(true);
 
    double center = (double)(pattern_size + 1) / 2.0;
    Matrix y_pattern(pattern_size, pattern_size);
    Matrix y_noise(pattern_size, pattern_size);
 
-   y_pattern.setZero();
-   y_pattern((int)(center + 0.5), (int)(center + 0.5)) = 1.0;
+   //y_pattern.setZero();
+   //y_pattern((int)(center + 0.5), (int)(center + 0.5)) = 1.0;
+   CreateNormalDistribution(y_pattern, pattern_center, pattern_center, 2.0);
 
    y_noise.setConstant( 1.0 / (double)(pattern_size * pattern_size));
 
@@ -635,12 +675,9 @@ void Test()
    ErrorOutput err_out(path, model_name);
 
    const int batch_size = 100;
-   vector_of_matrix batch = CreateBatch(batch_size);
-
-
+   vector_of_matrix batch = CreateBatch(batch_size,what);
 
    SmartCorStats stat_class(pattern_center, 0.000001);
-
 
    for (int b = 0; b < batch_size;b++) {
       vector_of_matrix m(1);
@@ -667,15 +704,12 @@ void Test()
    }
 
    std::cout << " correct/incorrect " << stat_class.Correct << " , " << stat_class.Incorrect << endl;
-   std::cout << "Save? y/n:  ";
+   std::cout << "Hit a key to continue.  ";
    char c;
    std::cin >> c;
-   if (c == 'y') {
-      SaveModelWeights();
-   }
 }
 
-void Info(double rad)
+void Info(double rad, int what)
 {
    InitModel(true);
 
@@ -696,8 +730,6 @@ void Info(double rad)
 #define clvgo_write(I,M) ((void)0)
 #define lvgo_write(I,M) ((void)0)
 #endif
-   const int batch_size = 100;
-   vector_of_matrix batch = CreateBatch(batch_size);
 
    SmartCorStats stat_class(pattern_center, 0.000001);
 
@@ -705,13 +737,24 @@ void Info(double rad)
    m[0].resize(pattern_size, pattern_size);
    bool is_pattern = true;
 
-   CreatePattern(m[0], pattern_center, pattern_center, rad);
+   switch (what) {
+   case 1:
+      CreateCone(m[0], pattern_center, pattern_center, rad);
+      break;
+   case 2:
+      CreateCylinder(m[0], pattern_center, pattern_center, rad);
+      break;
+   default:
+      throw runtime_error("Unknown pattern");
+   };
+
+   Normalize(m[0]);
 
    OWeightsCSVFile ocsv(path, "info");
    for (int i = 0; i < ConvoLayerList.size(); i++) {
       m = ConvoLayerList[i]->Eval(m);
       clveo_write(i, m);
-      ocsv.Write(m[i], i);
+      ocsv.Write(m[0], i);
    }
 
    ColVector cv;
@@ -737,6 +780,19 @@ int main(int argc, char* argv[])
 {
    std::cout << "Starting Smart Correlation\n";
 
+      //OWeightsCSVFile ocsv(path, "normal");
+
+      //Matrix nd(pattern_size, pattern_size);
+
+      //CreateNormalDistribution(nd, pattern_center, pattern_center, 2.0);
+
+      //CreateCylinder(nd, pattern_center, pattern_center, 12.0);
+      //Normalize(nd);
+
+      //ocsv.Write(nd, 1);
+      //exit(0);
+
+
    try {
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {
@@ -751,16 +807,22 @@ int main(int argc, char* argv[])
          Train(atoi(argv[2]), eta, load);
       }
       else if (argc > 1 && string(argv[1]) == "info") {
-         Interesting stuff.  The correlator is working.  Peak seems to be off a bit.
-         runtime_assert(argc > 2);
-         Info( atof(argv[2]) );
+         runtime_assert(argc > 3);
+         if (argc > 4) { path = argv[4]; }
+         Info( atof(argv[2]), atoi(argv[3]) );
+      }
+      else if (argc > 1 && string(argv[1]) == "test") {
+         if (argc < 3) {
+            cout << "Not enough parameters.  Parameters: obj | path [optional]" << endl;
+            return 0;
+         }
+         if (argc > 3) { path = argv[3]; }
+         Test(atoi(argv[2]));
       }
       else {
-         if (argc > 1) {
-            path = argv[1];
-         }
-
-         //Test(dataroot);
+         cout << "Not a command.\n  "
+            "train:  batches | eta | read stored coefs (0|1) [optional] | path [optional]" << endl
+            << "info: radius | object (1|2) | path [optional]" << endl << "test: obj (1|2) | path [optional]" << endl;
       }
    }
    catch (std::exception ex) {
