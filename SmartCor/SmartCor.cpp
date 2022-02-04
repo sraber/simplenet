@@ -120,23 +120,23 @@ public:
       output_norm(want_norm){}
    GradOutput() : output_norm(true) {}
    void Init(string name, bool want_norm = true) {
-      owf.open(path + "\\" + name + ".csv", ios::trunc);
+      //owf.open(path + "\\" + name + ".csv", ios::trunc);
       output_norm = want_norm;
    }
    void Write(RowVector& g)
    {
-      assert(owf.is_open());
-      owf << g.blueNorm() << endl;
+      //assert(owf.is_open());
+      //owf << g.blueNorm() << endl;
    }
    void Write(ColVector& g)
    {
-      assert(owf.is_open());
-      owf << g.blueNorm() << endl;
+      //assert(owf.is_open());
+      //owf << g.blueNorm() << endl;
    }
    void Write(vector_of_matrix& vg)
    {
+      /*
       assert(owf.is_open());
-
       for (int i = 0; i < vg.size();i++) {
          owf << (output_norm ? vg[i].blueNorm() : vg[i].maxCoeff());
          if (i < vg.size() - 1) {
@@ -144,6 +144,8 @@ public:
          }
       }
       owf << endl;
+      */
+      cout << "m: " << vg[0].blueNorm() << endl;
    }
 };
 
@@ -209,7 +211,7 @@ class SmartCorStats
 public:
    int Correct;
    int Incorrect;
-   SmartCorStats(int _center, double _thresh) : Center(_center), Threshold(_thresh), Correct(0), Incorrect(0) {}
+   SmartCorStats(double _center, double _thresh) : Center(_center), Threshold(_thresh), Correct(0), Incorrect(0) {}
    void Eval(const Matrix& m, bool is_pattern) {
       int rm = 0;
       int cm = 0;
@@ -247,14 +249,38 @@ const int pattern_size = 32;
 const double pattern_center = (double)(pattern_size + 1) / 2.0;
 
 class InitSmartCorConvoLayer : public iGetWeights{
-   int Size;
-   int Center;
+   double Size;
+   double Center;
+   int What;
+   double Radius;
+   int Layer;
 public:
-   InitSmartCorConvoLayer(int _size, int _center) : Size(_size), Center(_center){}
+   InitSmartCorConvoLayer(double _size, double _center, double _rad, int _what, int layer = 1) : 
+      Size(_size), Center(_center), Radius(_rad) ,What(_what), Layer(layer){}
    void ReadConvoWeight(Matrix& m, int k) {
-      //CreateCone(m, Center, Center, Size / 4);
-      CreateCylinder(m, Center, Center, Size / 4);
-      Normalize(m);
+      if (Layer == 1) {
+         switch (What) {
+         case 1:
+            CreateCone(m, Center, Center, Radius);
+            break;
+         case 2:
+            CreateCylinder(m, Center, Center, Radius);
+            break;
+         default:
+            throw runtime_error("incorrect object number.");
+         }
+         Normalize(m);
+      }
+      else {
+         m.setZero();
+         if ((int)floor(Center) == (int)ceil(Center)) {
+            m((Eigen::Index)floor(Center), (Eigen::Index)floor(Center)) = 1.0;
+         }
+         else {
+            Eigen::Index f = floor(Center);
+            m.block(f, f, 2, 2).setConstant(0.25);
+         }
+      }
    }
    void ReadConvoBias(Matrix& w, int k) {
       w.setZero();
@@ -262,6 +288,35 @@ public:
    void ReadFC(Matrix& m) {
       throw runtime_error("InitBigKernelConvoLayer::ReadFC not implemented");
    }
+};
+
+class FL2Debug : public FilterLayer2D::iCallBack
+{
+   string Name;
+   void HitKey() {
+      cout << "Hit Enter to continue." << endl;
+      char c;
+      cin >> c;
+   }
+public:
+   FL2Debug(string name) : Name(name) {}
+   // Inherited via iCallBack
+   //void Propeties(const bool& no_bias, const vector_of_matrix& x, const vector_of_matrix& w, const vector_of_matrix& dw, const vector_of_number& b, const vector_of_number& db, const vector_of_matrix& z) override
+   //{
+   //   cout << "W[0] norm: " << w[0].blueNorm() << endl << "16 x 16 center: " << endl << w[0].block(8, 8, 16, 16) << endl;
+   //   HitKey();
+   //}
+   void Propeties(const bool& no_bias, const vector_of_matrix& x, const vector_of_matrix& w, const vector_of_matrix& dw, const vector_of_number& b, const vector_of_number& db, const vector_of_matrix& z) override
+   {
+      cout << Name << endl << "Norms:" << endl
+         << "X: " << x[0].blueNorm()
+         << " W: " << w[0].blueNorm()
+         << " dW: " << dw[0].blueNorm()
+         << " Z: " << z[0].blueNorm() << endl;
+
+      //HitKey();
+   }
+
 };
 
 //--------------------------------------------------------------------
@@ -281,14 +336,21 @@ void InitSmartCorA(bool restore)
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
-                           //new actTanh(size_out * size_out), 
-                           new actLinear(size_out * size_out), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
-                                     //dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center)),
-                           true )
-                           );
+   {
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
+         new actReLU(size_out * size_out),
+         //new actLinear(size_out * size_out), 
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
+         dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 2)),
+         true);
+
+      //pl->SetEvalPreActivationCallBack(make_shared<FL2Debug>("Pre"));
+      //pl->SetEvalPostActivationCallBack(make_shared<FL2Debug>("Post"));
+
+      ConvoLayerList.push_back(pl);
+
+   }
    l++;
    //---------------------------------------------------------------
  
@@ -311,6 +373,88 @@ void InitSmartCorA(bool restore)
 
 }
 //---------------------------- End InitSmartCorA ---------------------------------------
+//--------------------------------------------------------------------
+void InitSmartCorB(bool restore)
+{
+   model_name = "SCB";
+   ConvoLayerList.clear();
+   LayerList.clear();
+
+   // Convolution Layer 1 -----------------------------------------
+   // Type: FilterLayer2D
+   int size_in  = pattern_size;
+   int size_out = pattern_size;
+   int kern = pattern_size;
+   int pad = pattern_size/2;
+   int kern_per_chn = 1;
+   int chn_in = 1;
+   int chn_out = kern_per_chn * chn_in;
+   int l = 1; // Layer counter
+   {
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
+         //new actReLU(size_out * size_out),
+         new actLinear(size_out * size_out), 
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
+         dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 2)),
+         true);
+
+      //pl->SetEvalPreActivationCallBack(make_shared<FL2Debug>("Pre"));
+      //pl->SetEvalPostActivationCallBack(make_shared<FL2Debug>("Post"));
+
+      ConvoLayerList.push_back(pl);
+
+   }
+   l++;
+   //---------------------------------------------------------------
+   /*
+   // Convolution Layer 2 -----------------------------------------
+   // Type: FilterLayer2D
+   size_in  = pattern_size;
+   size_out = pattern_size;
+   kern = pattern_size;
+   pad = pattern_size/2;
+   kern_per_chn = 1;
+   chn_in = 1;
+   chn_out = kern_per_chn * chn_in;
+   {
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
+         new actReLU(size_out * size_out),
+         //new actLinear(size_out * size_out), 
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01)),
+         //dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 2)),
+         true);
+
+      //pl->SetEvalPreActivationCallBack(make_shared<FL2Debug>("Pre"));
+      //pl->SetEvalPostActivationCallBack(make_shared<FL2Debug>("Post"));
+
+      ConvoLayerList.push_back(pl);
+
+   }
+   l++;
+   */
+   //---------------------------------------------------------------
+ 
+
+   // Flattening Layer 2 --------------------------------------------
+   // Type: Flatten2D
+   size_in  = size_out;
+   chn_in = chn_out;
+   size_out = size_in * size_in * chn_in;
+   chn_out = 1;
+   ConvoLayerList.push_back( make_shared<Flatten2D>(iConvoLayer::Size(size_in, size_in), chn_in) );
+   l++;
+   //---------------------------------------------------------------      
+   
+
+   // Loss Layer - Not part of network, must be called seperatly.
+   // Type: LossCrossEntropy
+   loss = make_shared<LossL2>(size_out, 1);   
+   //--------------------------------------------------------------
+
+}
+//---------------------------- End InitSmartCorB ---------------------------------------
 
 void InitSmartCor(bool restore)
 {
@@ -332,7 +476,7 @@ void InitSmartCor(bool restore)
                            new actReLU(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, (double)(pattern_size + 1) / 2.0)),
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size/4, 2)),
                            true )
                            );
    l++;
@@ -380,7 +524,7 @@ void InitSmartCor(bool restore)
 typedef void (*InitModelFunction)(bool);
 
 //InitModelFunction InitModel = InitSmartCor;
-InitModelFunction InitModel = InitSmartCorA;
+InitModelFunction InitModel = InitSmartCorB;
 
 void SaveModelWeights()
 {
@@ -491,14 +635,13 @@ void Train(int nloop, double eta, int load)
 {
    InitModel(load > 0 ? true : false);
 
-   double center = (double)(pattern_size + 1) / 2.0;
    Matrix y_pattern(pattern_size, pattern_size);
-   Matrix y_noise(pattern_size, pattern_size);
+   Matrix y_zero(pattern_size, pattern_size);
 
    CreateNormalDistribution(y_pattern, pattern_center, pattern_center, 2.0);
-   y_noise.setConstant( 0.0);
+   y_zero.setConstant( 0.0);
 
-   Matrix& y = y_pattern;
+   Matrix y = y_pattern;
 
 //#define STATS
 #ifdef STATS
@@ -519,24 +662,15 @@ void Train(int nloop, double eta, int load)
 #endif
    ErrorOutput err_out(path, model_name);
 
-   //std::random_device rd;     // only used once to initialise (seed) engine
-   //std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
-   //std::uniform_real_distribution<double> unr(pattern_size/8,pattern_size/2); // guaranteed unbiased
-   //std::uniform_int_distribution<int> uni(1, 10);
+   const int batch_size = 40;
+   vector_of_matrix batch = CreateBatch(batch_size/2, 2);
+   vector_of_matrix batch_reject = CreateBatch(batch_size/2, 1);
 
-   const int batch_size = 20;
-   vector_of_matrix batch = CreateBatch(batch_size, 2);
+   for (Matrix& m : batch_reject) { batch.push_back(m); }
+   batch_reject.clear();  
 
    for (int loop = 0; loop < nloop; loop++) {
-      //if (uni(rng) == 10) {
-      //   CreateNoise(m[0]);
-      //   y = y_noise;
-      //}
-      //else {
-      //   CreateCone(m[0], center, center, unr(rng));
-      //   //CreateCone(m[0], center, center, pattern_size/4);
-      //   y = y_pattern;
-      //}
+
       double e = 0;
       int n = 0;
       for (int b = 0; b < batch_size; b++, n++) {
@@ -544,6 +678,7 @@ void Train(int nloop, double eta, int load)
          m[0].resize(pattern_size, pattern_size);
 
          m[0] = batch[b];
+         y = (b < batch_size / 2) ? y_pattern : y_zero;
 
          for (int i = 0; i < ConvoLayerList.size(); i++) {
             m = ConvoLayerList[i]->Eval(m);
@@ -556,7 +691,7 @@ void Train(int nloop, double eta, int load)
             cv = LayerList[i]->Eval(cv);
             lveo_write(i, cv);
          }
-
+         //cout << "y: " << y.block(8,8,16,16) << endl;
          Eigen::Map<ColVector> yv(y.data(), y.size());
          double le = loss->Eval(cv, yv);
          //if (le > e) { e = le; }
@@ -593,24 +728,25 @@ void Train(int nloop, double eta, int load)
             }
          }
       }
-
-      for (auto lli : ConvoLayerList) {
-         lli->Update(eta);
-      }
-      for (auto lit : LayerList) {
-         lit->Update(eta);
+      if (loop < (nloop - 1)) {
+         for (auto lli : ConvoLayerList) {
+            lli->Update(eta);
+         }
+         for (auto lit : LayerList) {
+            lit->Update(eta);
+         }
       }
 
       err_out.Write(e);
-      cout << "count: " << loop << " error:" << e << endl;
+      cout << "------------------- count: " << loop << " error:" << e << " -----------------" << endl;
    }
 
-   SmartCorStats stat_class(pattern_center, 0.000001);
+   SmartCorStats stat_class(pattern_center, 1.0);
 
    for (int b = 0; b < batch_size;b++) {
       vector_of_matrix m(1);
       m[0].resize(pattern_size, pattern_size);
-      bool is_pattern = true;
+      bool is_pattern = b < batch_size/2 ? true : false;
       m[0] = batch[b];
 
       for (auto lli : ConvoLayerList) {
@@ -630,6 +766,7 @@ void Train(int nloop, double eta, int load)
    }
 
    std::cout << " correct/incorrect " << stat_class.Correct << " , " << stat_class.Incorrect << endl;
+   
    std::cout << "Save? y/n:  ";
    char c;
    std::cin >> c;
@@ -687,7 +824,7 @@ void Test(int what)
 
       for (auto lli : ConvoLayerList) {
          m = lli->Eval(m);
-         clveo_write(i, m);
+         clveo_write(b, m);
       }
 
       ColVector cv;
@@ -731,7 +868,7 @@ void Info(double rad, int what)
 #define lvgo_write(I,M) ((void)0)
 #endif
 
-   SmartCorStats stat_class(pattern_center, 0.000001);
+   SmartCorStats stat_class(pattern_center, 1.0);
 
    vector_of_matrix m(1);
    m[0].resize(pattern_size, pattern_size);

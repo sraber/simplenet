@@ -631,6 +631,10 @@ public:
 };
 //---------------------------------------------------------------
 // Convolution Layer classes ------------------------------------
+#define BACKPROP_CALLBACK_PREP \
+if( BackpropCallBack!=nullptr ){ \
+   debug_iter_dW.push_back( Matrix(iter_dW) );\
+}
 
 class FilterLayer2D : public iConvoLayer {
 public:
@@ -657,6 +661,35 @@ public:
    vector_of_matrix Z;
    iActive* pActive;
    bool NoBias;
+
+   class iCallBack
+   {
+   public:
+      virtual ~iCallBack() = 0 {};
+      virtual void Propeties(const bool& no_bias,
+         const vector_of_matrix& x,
+         const vector_of_matrix& w, const vector_of_matrix& dw,
+         const vector_of_number& b, const vector_of_number& db,
+         const vector_of_matrix& z) = 0;
+   };
+private:
+   shared_ptr<iCallBack> EvalPreActivationCallBack;
+   shared_ptr<iCallBack> EvalPostActivationCallBack;
+   shared_ptr<iCallBack> BackpropCallBack;
+
+   inline void CALLBACK(shared_ptr<iCallBack> icb)
+   {
+      if (icb != nullptr) {
+         icb->Propeties(NoBias, X, W, dW, B, dB, Z);
+      }
+   }
+   inline void BACKPROPCALLBACK(shared_ptr<iCallBack> icb, vector_of_matrix& iter_dW)
+   {
+      if (icb != nullptr) {
+         icb->Propeties(NoBias, X, W, iter_dW, B, dB, Z);
+      }
+   }
+public:
 
    FilterLayer2D(Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
       X(input_channels), 
@@ -796,6 +829,9 @@ public:
       vecSetXValue(X, _x);
       vecLinearCorrelate();
       vector_of_matrix vecOut(Z.size());
+
+      CALLBACK(EvalPreActivationCallBack);
+
       for (Matrix& mm : vecOut) { mm.resize(OutputSize.rows, OutputSize.cols); }
       vector_of_matrix::iterator iz = Z.begin();
       vector_of_matrix::iterator io = vecOut.begin();
@@ -806,6 +842,9 @@ public:
          Eigen::Map<ColVector> v(io->data(), io->size());
          v = pActive->Eval(z);
       }
+
+      CALLBACK(EvalPostActivationCallBack);
+
       return vecOut;
    }
 
@@ -824,8 +863,8 @@ public:
       // propagate upstream 
       // layer_grad corr=> rotated kernel to size of InputSize
       // sum results according to kernels per channel.
-      const int in_coming_channels =  KernelPerChannel * Channels;
-      assert(child_grad.size() == in_coming_channels);
+      const int incoming_channels =  KernelPerChannel * Channels;
+      assert(child_grad.size() == incoming_channels);
 
       // child_grad * Jacobian is stored in m_delta_grad.  The computation is made on
       // a row vector map onto m_delta_grad.
@@ -838,6 +877,7 @@ public:
       // because the derivitive of each of the kernel elements results in
       // this simplification.
       Matrix iter_dW(KernelSize.rows, KernelSize.cols);
+      vector_of_matrix debug_iter_dW;
 
       // The pass through stage (propagating the delta gradient up stream) uses
       // a 180 degree rotation of the Kernel matrix.  It is stored here
@@ -883,7 +923,9 @@ public:
          // Recall that rv_delta_grad is a vector map onto m_delta_grad.
          LinearCorrelate(X[chn], m_delta_grad, iter_dW);
 
-         // Average the result (iter_w_grad) into the Kernel gradient (dW).
+         BACKPROP_CALLBACK_PREP
+
+         // Average the result (iter_dW) into the Kernel gradient (dW).
          double a = 1.0 / (double)Count;
          double b = 1.0 - a;
          dW[i] = a * iter_dW + b * dW[i];
@@ -900,6 +942,7 @@ public:
          if (  !( (i+1) % KernelPerChannel ) ){  chn++; }
          i++;
       }
+      BACKPROPCALLBACK(BackpropCallBack, debug_iter_dW);
       return vm_backprop_grad;
    }
 
@@ -930,8 +973,11 @@ public:
       cout << "Weights saved" << endl;
    }
 
-
+   void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBack> icb) {  BackpropCallBack = icb; }
 };
+#undef BACKPROP_CALLBACK_PREP
 
 class MaxPool2D : public iConvoLayer {
 public:
