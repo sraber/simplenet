@@ -6,6 +6,11 @@
 #include <MNISTReader.h>
 #include <Layer.h>
 #include <bmp.h>
+#define _USE_MATH_DEFINES
+#include <math.h>
+#include <amoeba.h>
+
+string path = "C:\\projects\\neuralnet\\simplenet\\algors\\results";
 
 void MakeMNISTImage(string file, Matrix m)
 {
@@ -67,6 +72,7 @@ int GetMNISTLabel(ColVector& lv)
    return 0;
 }
 
+// NOTE: There is a 1-off issue when the out matrix dimension is odd.
 void LinearCorrelate( Matrix g, Matrix h, Matrix& out )
 {
    for (int r = 0; r < out.rows(); r++) {
@@ -74,8 +80,8 @@ void LinearCorrelate( Matrix g, Matrix h, Matrix& out )
          double sum = 0.0;
          for (int rr = 0; rr < h.rows(); rr++) {
             for (int cc = 0; cc < h.cols(); cc++) {
-               int gr = r + rr;
-               int gc = c + cc;
+               int gr = r + rr + 1;
+               int gc = c + cc + 1;
                if (gr >= 0 && gr < g.rows() && 
                      gc >= 0 && gc < g.cols()) {
                   sum += g(gr, gc) * h(rr, cc);
@@ -213,8 +219,8 @@ void TestKernelFlipper()
       }
    }
 
-   WriteWeightsCSV writer("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\unwrapmat.csv");
-   writer.Write(w);
+   OWeightsCSVFile writer(path,"unwrapmat");
+   writer.Write(w,1);
 
    //Eigen::Map<ColVector> cv(g.data(), g.size());
    //Eigen::Map<ColVector> ov1(dc1.data(), dc1.size());
@@ -239,8 +245,8 @@ void TestKernelFlipper()
    ofstream frv1("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\rv1.csv", ios::trunc);
    frv1 << rv1;
    frv1.close();
-   WriteWeightsCSV mdc1("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\dc1.csv");
-   mdc1.Write(dc1);
+   OWeightsCSVFile mdc1(path,"dc1");
+   mdc1.Write(dc1,1);
 
    // rotate k by 180 degrees ------------
       int kn2 = kn / 2;
@@ -269,8 +275,8 @@ void TestKernelFlipper()
 
    LinearCorrelate(gp, k, dc2);
 
-   WriteWeightsCSV mdc2("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\dc2.csv");
-   mdc2.Write(dc2);
+   OWeightsCSVFile mdc2(path,"dc2");
+   mdc2.Write(dc2,1);
 
    Matrix dif(dc2.rows(), dc2.cols());
    dif = dc1 - dc2;
@@ -338,9 +344,92 @@ void TestFilter(bool b_convolution, string name)
 
 }
 
+   double sqr(ColVector p)
+   {
+      double x = p[0];
+      double y = p(1);
+      
+      return pow( (x - 5.0), 2.0) + y * y - 100.0;
+   }
+
+   double sqr4(ColVector p)
+   {
+      double w = p[0];
+      double x = p(1);
+      double y = p[2];
+      double z = p(3);
+      
+      return pow( (x-5), 2.0) + y*y + 2 * w*w + z*z*z*z;
+   }
+
+void test_amoeba() 
+{
+   AmoFunc func = sqr4;
+   Amoeba aba(1.0e-5);
+   Matrix p(5,4);
+
+   p << 0.0, 0.0, 0.0, 0.0,
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0;
+
+   ColVector res = aba.minimize<AmoFunc>(p, func);
+
+   cout << aba.nfunc << endl;
+   cout << res;
+
+
+}
+
 int main()
 {
     std::cout << "Hello World!\n";
     TestFilter(true, "convo3");
+
+   //test_amoeba();
+   //exit(0);
 }
 
+   /*
+   // ---- Test Gradient ---
+   ColVector X(2);
+   ColVector Y(1);
+   X(0) = 1.5;
+   X(1) = 1.0;
+   Y(0) = 0.0;
+
+   int r = 5;
+   int c = 2;
+   ColVector g;
+   double e = 1.0e-12;
+   double w = LayerList[0]->W(r,c);
+   LayerList[0]->W(r,c) = w + e;
+   g = X;
+   for (const auto& lit : LayerList) { g = lit->Eval(g); }
+   double g1 = loss.Eval(g, Y);
+
+
+   LayerList[0]->W(r,c) = w - e;
+   g = X;
+   for (const auto& lit : LayerList) { g = lit->Eval(g); }
+   double g2 = loss.Eval(g, Y);
+
+   cout << (g1 - g2) / (2.0 * e) << endl;
+
+   LayerList[0]->W(r,c) = w;
+   g = X;
+   for (const auto& lit : LayerList) { g = lit->Eval(g); }
+   loss.Eval(g, Y);
+
+   RowVector bp = loss.LossGradient();
+   for (layer_list::reverse_iterator riter = LayerList.rbegin();
+      riter != LayerList.rend();
+      riter++) {
+      bp = (*riter)->BackProp(bp);
+   }
+
+   cout << LayerList[0]->dW.transpose()(r,c) << endl;
+
+   exit(0);
+   */

@@ -37,10 +37,10 @@ void Normalize(Matrix& m)
 void CreateCone(Matrix& m, double ro2, double co2, double radius)
 {
    for (int r = 0; r < m.rows(); r++) {
-      double rc = r - ro2;
+      double rc = r - ro2 + 1.0; // -1 accounts for zero offset matrix index.
       double r2 = rc * rc;
       for (int c = 0; c < m.cols(); c++) {
-         double cc = c - co2;
+         double cc = c - co2 + 1.0;
          double c2 = cc * cc;
          double cur_radius = sqrt((double)(r2 + c2));
          if (cur_radius < radius) {
@@ -56,10 +56,10 @@ void CreateCylinder(Matrix& m, double ro2, double co2, double radius)
    m.setZero();
    double pass_rad2 = radius * radius;
    for (int r = 0; r < m.rows(); r++) {
-      double rc = r - ro2;
+      double rc = r - ro2 + 1.0;;
       double r2 = rc * rc;
       for (int c = 0; c < m.cols(); c++) {
-         double cc = c - co2;
+         double cc = c - co2 + 1.0;
          double c2 = cc * cc;
          if ((r2 + c2) < pass_rad2) {
 
@@ -75,10 +75,10 @@ void CreateNormalDistribution(Matrix& m, double ro2, double co2, double std)
    double a = den / std;
    m.setZero();
    for (int r = 0; r < m.rows(); r++) {
-      double rc = r - ro2;
+      double rc = r - ro2 + 1.0;
       double r2 = rc * rc;
       for (int c = 0; c < m.cols(); c++) {
-         double cc = c - co2;
+         double cc = c - co2 + 1.0;
          double c2 = cc * cc;
          double cur_radius = sqrt((double)(r2 + c2));
          double b = cur_radius / std;
@@ -114,13 +114,16 @@ class GradOutput
 {
    ofstream owf;
    bool output_norm;
+   string Name;
 public:
    GradOutput(string name, bool want_norm = true) : 
       owf(path + "\\"  + name + ".csv", ios::trunc),
-      output_norm(want_norm){}
+      output_norm(want_norm),
+      Name(name){}
    GradOutput() : output_norm(true) {}
    void Init(string name, bool want_norm = true) {
       //owf.open(path + "\\" + name + ".csv", ios::trunc);
+      Name = name;
       output_norm = want_norm;
    }
    void Write(RowVector& g)
@@ -145,7 +148,14 @@ public:
       }
       owf << endl;
       */
-      cout << "m: " << vg[0].blueNorm() << endl;
+      cout << Name << " output: " << endl;
+      if (vg[0].rows() == 32) {
+         cout << vg[0].block(12, 12, 10, 10) << endl;
+      }
+      else {
+         //cout << vg[0] << endl;
+      }
+
    }
 };
 
@@ -246,7 +256,7 @@ public:
 };
 
 const int pattern_size = 32;
-const double pattern_center = (double)(pattern_size + 1) / 2.0;
+const double pattern_center = (double)pattern_size / 2.0;
 
 class InitSmartCorConvoLayer : public iGetWeights{
    double Size;
@@ -254,6 +264,22 @@ class InitSmartCorConvoLayer : public iGetWeights{
    int What;
    double Radius;
    int Layer;
+
+   void CreateWave(Matrix& m, double ro2, double co2, double radius)
+   {
+      m.setZero();
+      for (int r = 0; r < m.rows(); r++) {
+         double rc = r - ro2 + 1.0;;
+         double r2 = rc * rc;
+         for (int c = 0; c < m.cols(); c++) {
+            double cc = c - co2 + 1.0;
+            double c2 = cc * cc;
+            double rad = sqrt(r2 + c2);
+            m(r, c) = 0.0001 * sin(6.283185307 * 4.0 * rad / 32.0);
+         }
+      }
+   }
+
 public:
    InitSmartCorConvoLayer(double _size, double _center, double _rad, int _what, int layer = 1) : 
       Size(_size), Center(_center), Radius(_rad) ,What(_what), Layer(layer){}
@@ -266,6 +292,9 @@ public:
          case 2:
             CreateCylinder(m, Center, Center, Radius);
             break;
+         case 3:
+            CreateWave(m, Center, Center, Radius);
+            break;
          default:
             throw runtime_error("incorrect object number.");
          }
@@ -273,12 +302,13 @@ public:
       }
       else {
          m.setZero();
-         if ((int)floor(Center) == (int)ceil(Center)) {
-            m((Eigen::Index)floor(Center), (Eigen::Index)floor(Center)) = 1.0;
+         if ((int)floor(Center) == (int)ceil(Center) ){
+            Eigen::Index f = (floor(Center) - 1.0);
+            m.block(f, f, 2, 2).setConstant(0.25);
          }
          else {
-            Eigen::Index f = floor(Center);
-            m.block(f, f, 2, 2).setConstant(0.25);
+            Eigen::Index cen = (Eigen::Index)(Center - 1.0);
+            m(cen, cen ) = 1.0;
          }
       }
    }
@@ -314,6 +344,8 @@ public:
          << " dW: " << dw[0].blueNorm()
          << " Z: " << z[0].blueNorm() << endl;
 
+      cout << x[0].block(12, 12, 10, 10) << endl;
+
       //HitKey();
    }
 
@@ -338,11 +370,11 @@ void InitSmartCorA(bool restore)
    int l = 1; // Layer counter
    {
       shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
-         new actReLU(size_out * size_out),
-         //new actLinear(size_out * size_out), 
+         //new actReLU(size_out * size_out),
+         new actLinear(size_out * size_out), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
-         dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 2)),
+         dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
+         //dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 3)),
          true);
 
       //pl->SetEvalPreActivationCallBack(make_shared<FL2Debug>("Pre"));
@@ -367,8 +399,7 @@ void InitSmartCorA(bool restore)
    
 
    // Loss Layer - Not part of network, must be called seperatly.
-   // Type: LossCrossEntropy
-   loss = make_shared<LossL2>(size_out, 1);   
+   loss = make_shared<LossL4>(size_out, 1);   
    //--------------------------------------------------------------
 
 }
@@ -407,7 +438,7 @@ void InitSmartCorB(bool restore)
    }
    l++;
    //---------------------------------------------------------------
-   /*
+   
    // Convolution Layer 2 -----------------------------------------
    // Type: FilterLayer2D
    size_in  = pattern_size;
@@ -419,21 +450,20 @@ void InitSmartCorB(bool restore)
    chn_out = kern_per_chn * chn_in;
    {
       shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
-         new actReLU(size_out * size_out),
-         //new actLinear(size_out * size_out), 
+         //new actReLU(size_out * size_out),
+         new actLinear(size_out * size_out), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01)),
-         //dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 2)),
+         //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01)),
+         dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>( pattern_size, pattern_center, pattern_size / 4, 2, 2)),
          true);
 
       //pl->SetEvalPreActivationCallBack(make_shared<FL2Debug>("Pre"));
-      //pl->SetEvalPostActivationCallBack(make_shared<FL2Debug>("Post"));
+      //pl->SetBackpropCallBack(make_shared<FL2Debug>("Backprop"));
 
       ConvoLayerList.push_back(pl);
 
    }
    l++;
-   */
    //---------------------------------------------------------------
  
 
@@ -523,8 +553,8 @@ void InitSmartCor(bool restore)
 
 typedef void (*InitModelFunction)(bool);
 
-//InitModelFunction InitModel = InitSmartCor;
-InitModelFunction InitModel = InitSmartCorB;
+InitModelFunction InitModel = InitSmartCorA;
+//InitModelFunction InitModel = InitSmartCorB;
 
 void SaveModelWeights()
 {
@@ -630,9 +660,15 @@ vector_of_matrix CreateBatch(int size, int what )
    
    return vom;
 }
-
+//#define ALLPASS
 void Train(int nloop, double eta, int load)
 {
+#ifdef ALLPASS
+   cout << "Running all pass batch" << endl;
+#else
+   cout << "Running half reject batch" << endl;
+#endif
+
    InitModel(load > 0 ? true : false);
 
    Matrix y_pattern(pattern_size, pattern_size);
@@ -641,7 +677,7 @@ void Train(int nloop, double eta, int load)
    CreateNormalDistribution(y_pattern, pattern_center, pattern_center, 2.0);
    y_zero.setConstant( 0.0);
 
-   Matrix y = y_pattern;
+   Matrix* y = &y_pattern;
 
 //#define STATS
 #ifdef STATS
@@ -662,12 +698,18 @@ void Train(int nloop, double eta, int load)
 #endif
    ErrorOutput err_out(path, model_name);
 
-   const int batch_size = 40;
-   vector_of_matrix batch = CreateBatch(batch_size/2, 2);
-   vector_of_matrix batch_reject = CreateBatch(batch_size/2, 1);
+   const int batch_size = 20;
 
+#ifdef ALLPASS
+   vector_of_matrix batch = CreateBatch(batch_size, 2);
+#else
+   //******** Pattern Pass and Reject Setup **********
+   vector_of_matrix batch = CreateBatch(batch_size/4, 2);
+   vector_of_matrix batch_reject = CreateBatch(3*batch_size/4, 1);
    for (Matrix& m : batch_reject) { batch.push_back(m); }
    batch_reject.clear();  
+   //*************************************************
+#endif
 
    for (int loop = 0; loop < nloop; loop++) {
 
@@ -678,7 +720,13 @@ void Train(int nloop, double eta, int load)
          m[0].resize(pattern_size, pattern_size);
 
          m[0] = batch[b];
-         y = (b < batch_size / 2) ? y_pattern : y_zero;
+
+#ifndef ALLPASS
+         //************ Pattern Reject Switch **************
+         y = (b < batch_size / 4) ? &y_pattern : &y_zero;
+         // 
+         //*************************************************
+#endif
 
          for (int i = 0; i < ConvoLayerList.size(); i++) {
             m = ConvoLayerList[i]->Eval(m);
@@ -692,7 +740,7 @@ void Train(int nloop, double eta, int load)
             lveo_write(i, cv);
          }
          //cout << "y: " << y.block(8,8,16,16) << endl;
-         Eigen::Map<ColVector> yv(y.data(), y.size());
+         Eigen::Map<ColVector> yv(y->data(), y->size());
          double le = loss->Eval(cv, yv);
          //if (le > e) { e = le; }
          double a = 1.0 / (double)(n + 1);
@@ -711,8 +759,6 @@ void Train(int nloop, double eta, int load)
                lvgo_write(i, vm_backprop); // Debug
             }
             else {
-               // REVIEW: Add a visitor interface to BackProp that can be used
-               //         to produce metric's such as scale of dW.
                g = LayerList[i - 1]->BackProp(g);
                lvgo_write(i, g); // Debug
             }
@@ -741,12 +787,17 @@ void Train(int nloop, double eta, int load)
       cout << "------------------- count: " << loop << " error:" << e << " -----------------" << endl;
    }
 
-   SmartCorStats stat_class(pattern_center, 1.0);
+   SmartCorStats stat_class(pattern_center, 0.1);
 
    for (int b = 0; b < batch_size;b++) {
       vector_of_matrix m(1);
       m[0].resize(pattern_size, pattern_size);
-      bool is_pattern = b < batch_size/2 ? true : false;
+
+      bool is_pattern = true;
+#ifndef ALLPASS
+      is_pattern = b < batch_size/4 ? true : false;
+#endif
+
       m[0] = batch[b];
 
       for (auto lli : ConvoLayerList) {
@@ -780,18 +831,6 @@ void Test(int what)
    cout << "Starting test" << endl << "path: " << path << endl << "test obj: " << what << endl;
    InitModel(true);
 
-   double center = (double)(pattern_size + 1) / 2.0;
-   Matrix y_pattern(pattern_size, pattern_size);
-   Matrix y_noise(pattern_size, pattern_size);
-
-   //y_pattern.setZero();
-   //y_pattern((int)(center + 0.5), (int)(center + 0.5)) = 1.0;
-   CreateNormalDistribution(y_pattern, pattern_center, pattern_center, 2.0);
-
-   y_noise.setConstant( 1.0 / (double)(pattern_size * pattern_size));
-
-   Matrix& y = y_pattern;
-
 //#define STATS
 #ifdef STATS
    map<int,GradOutput> lveo;
@@ -812,14 +851,25 @@ void Test(int what)
    ErrorOutput err_out(path, model_name);
 
    const int batch_size = 100;
-   vector_of_matrix batch = CreateBatch(batch_size,what);
-
+#ifdef ALLPASS
+   vector_of_matrix batch = CreateBatch(batch_size, 2);
+#else
+   //******** Pattern Pass and Reject Setup **********
+   vector_of_matrix batch = CreateBatch(batch_size/2, 2);
+   vector_of_matrix batch_reject = CreateBatch(batch_size/2, 1);
+   for (Matrix& m : batch_reject) { batch.push_back(m); }
+   batch_reject.clear();  
+   //*************************************************
+#endif
    SmartCorStats stat_class(pattern_center, 0.000001);
 
    for (int b = 0; b < batch_size;b++) {
       vector_of_matrix m(1);
       m[0].resize(pattern_size, pattern_size);
       bool is_pattern = true;
+#ifndef ALLPASS
+      is_pattern = b < batch_size/2 ? true : false;
+#endif
       m[0] = batch[b];
 
       for (auto lli : ConvoLayerList) {
@@ -868,7 +918,7 @@ void Info(double rad, int what)
 #define lvgo_write(I,M) ((void)0)
 #endif
 
-   SmartCorStats stat_class(pattern_center, 1.0);
+   SmartCorStats stat_class(pattern_center, 0.1);
 
    vector_of_matrix m(1);
    m[0].resize(pattern_size, pattern_size);
@@ -912,23 +962,48 @@ void Info(double rad, int what)
 
 }
 
+// There is a 1-off issue when the out matrix dimension is odd.
+   void LinearCorrelate( const Matrix g, const Matrix h, Matrix& out, double bias = 0.0 )
+   {
+      for (int r = 0; r < out.rows(); r++) {
+         for (int c = 0; c < out.cols(); c++) {
+            double sum = 0.0;
+            for (int rr = 0; rr < h.rows(); rr++) {
+               for (int cc = 0; cc < h.cols(); cc++) {
+                  int gr = r + rr +1;
+                  int gc = c + cc +1;
+                  if (gr >= 0 && gr < g.rows() && 
+                        gc >= 0 && gc < g.cols()) {
+                     sum += g(gr, gc) * h(rr, cc);
+                  }
+               }
+            }
+            out(r, c) = sum + bias;
+         }
+      }
+   }
 
 int main(int argc, char* argv[])
 {
    std::cout << "Starting Smart Correlation\n";
 
       //OWeightsCSVFile ocsv(path, "normal");
+      //
+      //Matrix cor(pattern_size, pattern_size);
+      //Matrix h(pattern_size, pattern_size);
+      //Matrix x(2 * pattern_size, 2 * pattern_size);
 
-      //Matrix nd(pattern_size, pattern_size);
+      //CreateNormalDistribution(h, pattern_center, pattern_center, 2.0);
+      //x.setZero();
+      //x.block(pattern_center, pattern_center, pattern_size, pattern_size) = h;
 
-      //CreateNormalDistribution(nd, pattern_center, pattern_center, 2.0);
-
+      //LinearCorrelate(x, h, cor);
       //CreateCylinder(nd, pattern_center, pattern_center, 12.0);
       //Normalize(nd);
 
-      //ocsv.Write(nd, 1);
+      //ocsv.Write("norm",h, 1);
+      //ocsv.Write("cor", cor, 1);
       //exit(0);
-
 
    try {
       if (argc > 1 && string(argv[1]) == "train") {

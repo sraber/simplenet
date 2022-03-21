@@ -67,11 +67,10 @@ struct Amoeba {
 		p=pp;
 		y.resize(mpts);
 		for (Int i=0;i<mpts;i++) {
-			for (Int j=0;j<ndim;j++)
 #ifdef EIGMAT
-				x[j]=p(i,j);
+			x=p.row(i);
 #else
-				x[j]=p[i][j];
+			for (Int j = 0; j < ndim; j++) { x[j] = p[i][j]; }
 #endif
 			y[i]=func(x);
 		}

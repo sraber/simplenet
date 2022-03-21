@@ -324,6 +324,10 @@ public:
       string pathname = Path + "\\" + RootName + "." + str_count + ".csv";
       Put(m,pathname);
    }
+   void Write(string root_name, Matrix& m, int k) {
+      RootName = root_name;
+      Write(m, k);
+   }
 };
 //----------------------------------------------------------------
 
@@ -401,19 +405,15 @@ public:
       // to the values of the Sigmoid on the way out.  It will later
       // be passed into the Jacobian method and used to compute the jacobian.
       for (int i = 0; i < Size; i++) {
-         SM(i) = Sigmoid(q(i));
-         // REVIEW: Next is to get rid of SM and return q.
-         q(i) = SM(i);
+         q(i) = Sigmoid(q(i));
       }
-      return SM;
+      return q;
    }
    ColVector Eval(Eigen::Map<ColVector>& q) {
       for (int i = 0; i < Size; i++) {
-         SM(i) = Sigmoid(q(i));
-         // REVIEW: Next is to get rid of SM and return q.
-         q(i) = SM(i);
+         q(i) = Sigmoid(q(i));
       }
-      return SM;
+      return q;
    }
    Matrix Jacobian(const ColVector& q) {
       for (int i = 0; i < Size; i++) {
@@ -751,6 +751,7 @@ public:
       delete pActive;
    }
 
+   // NOTE: There is a 1-off issue when the out matrix dimension is odd.
    void LinearCorrelate( const Matrix g, const Matrix h, Matrix& out, double bias = 0.0 )
    {
       for (int r = 0; r < out.rows(); r++) {
@@ -758,8 +759,8 @@ public:
             double sum = 0.0;
             for (int rr = 0; rr < h.rows(); rr++) {
                for (int cc = 0; cc < h.cols(); cc++) {
-                  int gr = r + rr;
-                  int gc = c + cc;
+                  int gr = r + rr + 1;
+                  int gc = c + cc + 1;
                   if (gr >= 0 && gr < g.rows() && 
                         gc >= 0 && gc < g.cols()) {
                      sum += g(gr, gc) * h(rr, cc);
@@ -1514,6 +1515,45 @@ public:
    RowVector LossGradient(void) {
       DebugOut("Loss gradiant : " << 2.0 * Z.transpose() << endl)
       return 2.0 * Z.transpose();
+   }
+};
+
+class LossL4 : public iLossLayer{
+public:
+   int Size;
+   ColVector Z;
+
+   LossL4() : Size(0) {}
+   LossL4(int input_size, int output_size) :
+      Z(input_size),
+      Size(input_size){}
+
+   void Init(int input_size, int output_size) {
+      Z.resize(input_size);
+      Size = input_size;
+   }
+   Number Eval(const ColVector& x, const ColVector& y) {
+      Z = x - y;
+      double* iz = Z.data();
+      double* ize = iz + Z.size();
+      double sum = 0.0;
+      for (; iz < ize; iz++) {
+         double v = *iz * *iz;
+         sum += v * v;
+         *iz = v * *iz;
+      }
+      return sum;
+   }
+
+   // REVIEW: How is the Weight Decay term added to this formulation?
+   //         Weight decay is sum of all layer weights squared.  A scalar.
+   //         The derivitive seems to be a matrix which is incompatiable 
+   //         with the RowVector.
+   //         http://ufldl.stanford.edu/tutorial/supervised/MultiLayerNeuralNetworks/
+
+   RowVector LossGradient(void) {
+      DebugOut("Loss gradiant : " << 2.0 * Z.transpose() << endl)
+      return 4.0 * Z.transpose();
    }
 };
 
