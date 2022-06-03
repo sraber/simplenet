@@ -27,7 +27,7 @@ void normalize_weight_mpg(data_list& dat)
 {
    double wsum = 0.0;
    double msum = 0.0;
-   int n = dat.size();
+   int n = (int)dat.size();
    for (const MPG_Data& idat : dat) {
       wsum += idat.weight;
       msum += idat.mpg;
@@ -53,6 +53,7 @@ void normalize_weight_mpg(data_list& dat)
 }
 
 //---------------------------------------
+string path = "C:\\projects\\neuralnet\\simplenet\\SNRegression";
 
 typedef list< shared_ptr<Layer> > layer_list;
 layer_list LayerList;
@@ -60,8 +61,7 @@ layer_list LayerList;
 void TestMPG(void)
 {
    LayerList.push_back(make_shared<Layer>(1, 1, new actLinear(1),
-      make_shared<IOWeightsBinaryFile>("C:\\projects\\neuralnet\\simplenet\\SNRegression\\SNRegress.1.wts") ));
-
+                       make_shared<IOWeightsBinaryFile>(path, "SNRegress.1") ));
    ColVector X(1);
    X(0) = -0.5;
    for (const auto& lit : LayerList) {
@@ -69,11 +69,10 @@ void TestMPG(void)
    }
 
    cout << X << endl;
-
-
 }
 
 void MakeSurface(ColVector& x, ColVector& y, string file);
+
 
 int main(int argc, char* argv[])
 {
@@ -89,7 +88,7 @@ int main(int argc, char* argv[])
 
 
    //------------ setup the network ------------------------------
-   LayerList.push_back( make_shared<Layer>(1, 1, new actLinear(1), make_shared<InitWeightsToConstants>(0.1, 0.0)
+   LayerList.push_back( make_shared<Layer>(1, 1, new actLinear(1), make_shared<IWeightsToConstants>(0.1, 0.0)
       /*, "C:\\projects\\neuralnet\\simplenet\\SNRegression\\weights.csv"*/));
    LossL2 loss(1, 1);
    //-------------------------------------------------------------
@@ -152,10 +151,9 @@ int main(int argc, char* argv[])
    for (const auto& lit : LayerList) {
       l++;
       string layer = to_string(l);
-      lit->Save(make_shared<IOWeightsBinary>("C:\\projects\\neuralnet\\simplenet\\SNRegression\\SNRegress." + layer + ".wts"));
+      lit->Save(make_shared<IOWeightsBinaryFile>(path, "SNRegress." + layer ));
    }
 
-   FINISH:
    char c;
    cin >> c;
 

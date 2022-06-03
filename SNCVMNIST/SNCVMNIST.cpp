@@ -345,7 +345,7 @@ void InitLeNet5Model( bool restore )
                                      dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in))) );
 
    // Pooling Layer 2
-   // Type: AvgPool3D
+   // Type: poolAvg3D
    size_in  = size_out;
    size_out = 14;
    chn_in = chn_out;
@@ -370,8 +370,8 @@ void InitLeNet5Model( bool restore )
    k = 14;  maps[k].resize(4); maps[k](0) = 0; maps[k](1) = 2; maps[k](2) = 3;  maps[k](3) = 5;
    k = 15;  maps[k].resize(6); maps[k](0) = 0; maps[k](1) = 1; maps[k](2) = 2;  maps[k](3) = 3;  maps[k](4) = 4;  maps[k](5) = 5;
 
-   //                                    MaxPool3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) 
-   ConvoLayerList.push_back(make_shared<AvgPool3D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out), chn_out, maps));
+   //                                    poolMax3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) 
+   ConvoLayerList.push_back(make_shared<poolAvg3D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out), chn_out, maps));
    l++;  //Need to account for each layer when restoring.
 
    // Convolution Layer 3
@@ -391,7 +391,7 @@ void InitLeNet5Model( bool restore )
                                      dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in))) );
 
    // Pooling Layer 4
-   // Type: AvgPool3D
+   // Type: poolAvg3D
     chn_in = chn_out;
     chn_out = 1;  // Pool all layers into one layer.
    vector_of_colvector_i maps4(1);
@@ -401,7 +401,7 @@ void InitLeNet5Model( bool restore )
    size_out = 5;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<AvgPool3D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out), chn_out, maps4));
+   ConvoLayerList.push_back(make_shared<poolAvg3D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out), chn_out, maps4));
    l++;  //Need to account for each layer when restoring.
 
    // Convolution Layer 5
@@ -478,13 +478,13 @@ void InitLeNet5AModel(bool restore)
    //---------------------------------------------------------------
  
    // Pooling Layer 2 ----------------------------------------------
-   // Type: MaxPool2D
+   // Type: poolMax2D
    size_in  = size_out;
    size_out = 14;
    chn_in = chn_out;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<AvgPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   ConvoLayerList.push_back(make_shared<poolAvg2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
    //---------------------------------------------------------------
 
@@ -505,13 +505,13 @@ void InitLeNet5AModel(bool restore)
    //---------------------------------------------------------------
 
    // Pooling Layer 4 ----------------------------------------------
-   // Type: MaxPool2D
+   // Type: poolMax2D
    size_in  = size_out;
    size_out = 7;
    chn_in = chn_out;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<AvgPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   ConvoLayerList.push_back(make_shared<poolAvg2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
    //---------------------------------------------------------------      
 
@@ -579,13 +579,13 @@ void InitLeNet5BModel(bool restore)
    //---------------------------------------------------------------
  
    // Pooling Layer 2 ----------------------------------------------
-   // Type: MaxPool2D
+   // Type: PoolAvg2D
    size_in  = size_out;
    size_out = 14;
    chn_in = chn_out;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<AvgPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   ConvoLayerList.push_back(make_shared<poolAvg2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
    //---------------------------------------------------------------
 
@@ -605,13 +605,13 @@ void InitLeNet5BModel(bool restore)
    //---------------------------------------------------------------
 
    // Pooling Layer 4 ----------------------------------------------
-   // Type: MaxPool2D
+   // Type: poolAvg2D
    size_in  = size_out;
    size_out = 7;
    chn_in = chn_out;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<AvgPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   ConvoLayerList.push_back(make_shared<poolAvg2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
    //---------------------------------------------------------------      
 
@@ -675,14 +675,14 @@ void InitAdHockModel(bool restore)
    //---------------------------------------------------------------
  
    // Pooling Layer 2 ----------------------------------------------
-   // Type: MaxPool2D
+   // Type: poolMax2D
    /*
    size_in  = size_out;
    size_out = 7;
    chn_in = chn_out;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<MaxPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   ConvoLayerList.push_back(make_shared<poolMax2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
    */
    //---------------------------------------------------------------
@@ -704,13 +704,13 @@ void InitAdHockModel(bool restore)
    //---------------------------------------------------------------
 
    // Pooling Layer 4 ----------------------------------------------
-   // Type: MaxPool2D
+   // Type: poolAvg2D
    size_in  = size_out;
    size_out = 7;
    chn_in = chn_out;
 
    assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<AvgPool2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
+   ConvoLayerList.push_back(make_shared<poolAvg2D>(iConvoLayer::Size(size_in, size_in), chn_in, iConvoLayer::Size(size_out, size_out)));
    l++;  //Need to account for each layer when restoring.
    //---------------------------------------------------------------      
    */
@@ -1166,7 +1166,7 @@ void Train(int nloop, string dataroot, double eta, int load)
    MNISTReader reader1( dataroot + "\\test\\t10k-images-idx3-ubyte",
                         dataroot + "\\test\\t10k-labels-idx1-ubyte");
 
-   LossClassifierStats stat_class;
+   ClassifierStats stat_class;
 
    ColVector X;
    ColVector Y;
@@ -1212,7 +1212,7 @@ void Test(string dataroot)
    MNISTReader reader(dataroot + "\\test\\t10k-images-idx3-ubyte",
                       dataroot + "\\test\\t10k-labels-idx1-ubyte");
 
-   LossClassifierStats stat_class;
+   ClassifierStats stat_class;
 
    ColVector X;
    ColVector Y;

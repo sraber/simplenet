@@ -96,7 +96,7 @@ void TestGradComp()
          LayerList[0]->W(r, c) = w1;
          COMPUTE_LOSS
          RowVector g = loss->LossGradient();
-         for (int i = LayerList.size() - 1; i >= 0; --i) {
+         for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
             LayerList[i]->Count = 0;
             g = LayerList[i]->BackProp(g);
          }
@@ -143,8 +143,6 @@ void MakeTrendErrorFunction( int r, int c, string fileroot )
 
    MNISTReader::MNIST_list dl = reader.read_batch(10);
 
-   
-
    ColVector cv;
    int n = 0;
 
@@ -168,7 +166,7 @@ void MakeTrendErrorFunction( int r, int c, string fileroot )
 
       LayerList[0]->Count = 0;
       RowVector g = loss->LossGradient();
-      for (int i = LayerList.size() - 1; i >= 0; --i) {
+      for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
          g = LayerList[i]->BackProp(g);
       } 
       df(i) = LayerList[0]->dW(c,r);
@@ -189,7 +187,7 @@ void Train( int nloop, string dataroot, double eta, int load )
 
    InitModel(load > 0 ? true : false);
    ErrorOutput err_out(path, model_name);
-   LossClassifierStats stat_class;
+   ClassifierStats stat_class;
 
    ColVector X;
    ColVector Y;
@@ -252,7 +250,7 @@ void Test(string dataroot)
    MNISTReader reader(dataroot + "\\test\\t10k-images-idx3-ubyte",
                       dataroot + "\\test\\t10k-labels-idx1-ubyte");
 
-   LossClassifierStats stat_class;   ColVector X;
+   ClassifierStats stat_class;   ColVector X;
 
    ColVector Y;
    double avg_e = 0.0;

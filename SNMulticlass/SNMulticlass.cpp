@@ -60,7 +60,7 @@ int main(int argc, char* argv[])
    tup_list points;
    int k = 3;
 
-   // The label is a 3 element vector.  1 in the lable type, zerro elsewhere.
+   // The label is a 3 element vector.  1 in the lable type, zero elsewhere.
 
    MakePointCloud(points, 5.0, 5.0, 0, k, 20);
    MakePointCloud(points, -5.0, -5.0, 1, k, 20);

@@ -4,7 +4,6 @@
 #include <fstream>
 #include <list>
 #include <vector>
-#include <memory>
 #include <Layer.h>
 #include <random>
 #define _USE_MATH_DEFINES
@@ -12,13 +11,14 @@
 
 using namespace std;
 
-void MakeDecsionSurface( string fileroot );
-void MakeErrorSurface(ColVector _x, ColVector _y, string fileroot);
-
-
 typedef vector< shared_ptr<Layer> > layer_list;
 layer_list LayerList;
 shared_ptr<iLossLayer> loss;
+
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// Output file path.  Change it to suit your file structure.
+string path = "C:\\projects\\neuralnet\\simplenet\\SNLogic";
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 struct tup {
    double x1;
@@ -27,6 +27,9 @@ struct tup {
    tup(double _x1, double _x2, double _y) : x1(_x1), x2(_x2), y(_y) {}
 };
 typedef list<tup> tup_list;
+
+void MakeDecsionSurface( string fileroot );
+void MakeErrorSurface(tup_list points);
 
 void MakePointCloud(tup_list& tuples, double xc, double yc, int label, int n)
 {
@@ -51,63 +54,140 @@ void MakePointRing(tup_list& tuples, double xc, double yc, double radius, int la
    }
 }
 
+#define COMPUTE_LOSS {\
+   cv = x;\
+   for (auto lli : LayerList) {\
+      lli->Count = 0;\
+      cv = lli->Eval(cv);\
+   }\
+   e = loss->Eval(cv, y);\
+}
 
-string path = "C:\\projects\\neuralnet\\simplenet\\SNLogic";
+void TestGradComp(tup t)
+{
+   ColVector x(2);
+   ColVector y(1);
+   x(0) = t.x1;
+   x(1) = t.x2;
+   y(0) = t.y;
+
+   // NOTE: This is a blind downcast to Layer.
+   shared_ptr<Layer> ipcl = dynamic_pointer_cast<Layer>(LayerList[0]);
+   assert(ipcl);
+   int rows = (int)ipcl->W.rows();
+   int cols = (int)ipcl->W.cols();
+
+   Matrix dif(rows, cols);
+   Matrix dwt(rows, cols);
+
+   ColVector cv;
+   double e;
+
+   COMPUTE_LOSS
+   RowVector g = loss->LossGradient();
+   for (layer_list::reverse_iterator riter = LayerList.rbegin();
+      riter != LayerList.rend();
+      riter++) {
+      g = (*riter)->BackProp(g);
+   } 
+   dwt = ipcl->dW.transpose();
+
+   for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+         double f1, f2;
+         double eta = 1.0e-5;
+
+         double w1 = ipcl->W(r, c);
+         //----- Eval ------
+         ipcl->W(r, c) = w1 - eta;
+         COMPUTE_LOSS
+         f1 = e;
+
+         ipcl->W(r, c) = w1 + eta;
+         COMPUTE_LOSS
+         f2 = e;
+
+         ipcl->W(r, c) = w1;
+
+         double grad1 = dwt(r, c);
+         double grad = (f2 - f1) / (2.0*eta);
+         //double grad = (f2 - f1) / eta;
+
+         dif(r, c) = abs(grad - grad1);
+      }
+   }
+
+   cout << "dW Max error: " << dif.maxCoeff() << endl;
+
+   OWeightsCSVFile out_file(path, "dif");
+   out_file.Write(dif, 1);
+
+   cout << "enter a key and press Enter" << endl;
+   char c;
+   cin >> c;
+}
+
 
 int main(int argc, char* argv[])
 {
    tup_list points;
-   ofstream ofp(path + "\\points.csv", ios::trunc);
 
    /*
-   MakePointCloud(points, -5.0, 5.0, 1, 10);
-   MakePointCloud(points, -5.0, 0.0, 1, 10);
-   MakePointCloud(points, -5.0, -5.0, 1, 10);
-   MakePointCloud(points, 0.0, 5.0, 0, 10);
-   MakePointCloud(points, 0.0, 0.0, 0, 10);
-   MakePointCloud(points, 0.0, -5.0, 0, 10);
-   MakePointCloud(points, 5.0, 5.0, 1, 10);
-   MakePointCloud(points, 5.0, 0.0, 1, 10);
-   MakePointCloud(points, 5.0, -5.0, 1, 10);
-   */
-   //MakePointCloud(points, 5.0, 5.0, 0, 10);
-   //MakePointCloud(points, 5.0, -5.0, 0, 10);
-   //MakePointCloud(points, -5.0, 5.0, 1, 10);
-   //MakePointCloud(points, -5.0, -5.0, 1, 10);
-
-   //MakePointCloud(points, 5.0, 5.0, 0, 2);
-   //MakePointCloud(points, 5.0, -5.0, 1, 2);
-
+   // Neural Networks paper - simple example
    points.push_back({ 6.5, 4.0, (double)0 });
-   points.push_back({ 5.0, 4.5, (double)0 });
-   points.push_back({ 4.0, -3.0, (double)1 });
    points.push_back({ 4.5, -4.0, (double)1 });
-
-
-  // MakePointRing(points, 0.0, 0.0, 8.0, 1, 40);
-  // MakePointRing(points, 0.0, 0.0, 5.0, 0, 40);
-  // MakePointCloud(points, 0.0, 0.0, 1, 20);
-
-
-   //LayerList.push_back(make_shared<Layer>(2, 1, new actSigmoid(1), make_shared<InitWeightsToRandom>(0.1)));
-
+   points.push_back({ -4.0, 4.5, (double)1 });
    //------------ setup the network ------------------------------
-   //LayerList.push_back(make_shared<Layer>(2, 12, new actSigmoid(12), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
-   //LayerList.push_back(make_shared<Layer>(12, 7, new actSigmoid(7), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
-   //LayerList.push_back(make_shared<Layer>(7, 1, new actSigmoid(1), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
-   //LayerList.push_back(make_shared<Layer>(12, 1, new actSigmoid(1), make_shared<InitWeightsToRandom>(0.1, 0.0)));
-
    LayerList.push_back(make_shared<Layer>(2, 1, new actSigmoid(1), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   */
 
+   // Tougher example ---------------------------------------
+   // This example puts a cloud of 1's at the center, with a
+   // ring of 0's around it, followed by a ring of 1's around that.
+   MakePointRing(points, 0.0, 0.0, 8.0, 1, 80);
+   MakePointRing(points, 0.0, 0.0, 5.0, 0, 160);
+   MakePointCloud(points, 0.0, 0.0, 1, 80);
+
+   // Try 2d+2 in hidden layer for Point Ring problem.  
+   //     See: APPROACH TO THE SYNTHESIS OF NEURAL NETWORK STRUCTURE DURING CLASSIFICATION
+   // A two layer network with a Sigmoid activation can apparently fit any data set given enough
+   // interior nodes.  Experiment with the number of interior nodes by changing the value of
+   // a1.
+   //------------ setup the network ------------------------------
+   int a1 = 9;
+   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   //--  End Tough example ------------------------------------
+
+   //------ Back-propagation test setup.
+   // The setup was never run to see if it would converge.  It was
+   // used along with the function TestGradComp to test the accuracy
+   // of the Back-Propagation algorithm.
+   //LayerList.push_back(make_shared<Layer>(2, 5, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   //LayerList.push_back(make_shared<Layer>(5, 9, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   //LayerList.push_back(make_shared<Layer>(9, 11, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   //LayerList.push_back(make_shared<Layer>(11, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   //-- End Backprop test setup ---------------------
+
+   // Setup the loss layer. 
    loss = make_shared<LossL2>(1, 1);   
 
    //-------------------------------------------------------------
 
-   for (const tup& t : points) {
-      ofp << t.x1 << "," << t.x2 << "," << t.y << endl;
-   }
+   //***************  Test Gradient Computation ********************
+   //TestGradComp( points.front() );
+   //return 0;
+   //***************************************************************
 
-   for (int loop = 1; loop < 5000; loop++) {
+   //************ Point output to file ****************
+   //{
+   //    ofstream ofp(path + "\\points.csv", ios::trunc);
+   //    for (const tup& t : points) {
+   //       ofp << t.x1 << "," << t.x2 << "," << t.y << endl;
+   //    }
+   //}
+
+   for (int loop = 1; loop <= 40000; loop++) {
       double avg_error = 0.0;
       int count = 0;
       for (const tup& t : points) {
@@ -122,6 +202,9 @@ int main(int argc, char* argv[])
             X = lit->Eval(X);
          }
          double error = loss->Eval(X, Y);
+         //if (!(loop % 100)) {
+         //   cout << error << ",";
+         //}
          double a = 1.0 / (double)count;
          double b = 1 - a;
          avg_error = a * error + b * avg_error;
@@ -153,18 +236,10 @@ int main(int argc, char* argv[])
       lit->Save(make_shared<IOWeightsBinaryFile>(path,"parallel." + layer ));
    }
 
-   MakeDecsionSurface("C:\\projects\\neuralnet\\simplenet\\SNLogic\\ds");
+   MakeDecsionSurface(path + "\\ds");
 
-  ColVector X(2);
-  ColVector Y(1);
-  int count = 1;
-  for (const tup& t : points) {
-     X(0) = t.x1;
-     X(1) = t.x2;
-     Y(0) = t.y;
-     MakeErrorSurface(X, Y, path + "\\es." + to_string(count) );
-     count++;
-   }
+
+   //MakeErrorSurface( points );
 
    cout << "Output complete" << endl;
 
@@ -178,14 +253,14 @@ void MakeDecsionSurface( string fileroot )
 
    assert(owf.is_open());
 
-   ColVector w0(100);
-   ColVector w1(100);
+   ColVector w0(99);
+   ColVector w1(99);
    w0.setLinSpaced(double{ -10.0 }, double{ 10.0 });
    w1.setLinSpaced(double{ -10.0 }, double{ 10.0 });
 
-   Matrix f(100, 100);
-   for (int r = 0; r < 100; r++) {
-      for (int c = 0; c < 100; c++) {
+   Matrix f(99, 99);
+   for (int r = 0; r < 99; r++) {
+      for (int c = 0; c < 99; c++) {
          ColVector X(2);
          X(0) = w0(c);
          X(1) = w1(r);
@@ -202,35 +277,47 @@ void MakeDecsionSurface( string fileroot )
    owf.close();
 }
 
-void MakeErrorSurface( ColVector _x, ColVector _y, string fileroot )
+void MakeErrorSurface( tup_list points )
 {
-   ofstream owf(fileroot + ".csv", ios::trunc);
-
-   assert(owf.is_open());
-
-   ColVector w0(100);
-   ColVector w1(100);
+   const int grid = 99;
+   ColVector w0(grid);
+   ColVector w1(grid);
    w0.setLinSpaced(-2.0, 2.0);
    w1.setLinSpaced(-2.0, 2.0);
 
    Matrix w = LayerList[0]->W;
 
-   Matrix f(100, 100);
-   for (int r = 0; r < 100; r++) {
-      for (int c = 0; c < 100; c++) {
-         ColVector X(2);
-         X = _x;
-         LayerList[0]->W(0, 0) = w0(r);
-         LayerList[0]->W(0, 1) = w1(c);
-         for (const auto& lit : LayerList) {
-            X = lit->Eval(X);
-         }
-         f(r, c) = loss->Eval(X,_y);
-      }
+   for (int i = 0; i < grid; i++) {
+      w0(i) = w0(i) + w(0, 0);
+      w1(i) = w1(i) + w(0, 1);
    }
 
-   // octave file format
-   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
-   owf << f.format(OctaveFmt);
-   owf.close();
+   int count = 1;
+   for (const tup& t : points) {
+      ofstream owf(path + "\\es." + to_string(count) + ".csv", ios::trunc);
+      assert(owf.is_open());
+      Matrix f(grid, grid);
+      for (int r = 0; r < grid; r++) {
+         for (int c = 0; c < grid; c++) {
+            ColVector X(2);
+            ColVector Y(1);
+            X(0) = t.x1;
+            X(1) = t.x2;
+            Y(0) = t.y;
+            LayerList[0]->W(0, 0) = w0(r);
+            LayerList[0]->W(0, 1) = w1(c);
+            for (const auto& lit : LayerList) {
+               X = lit->Eval(X);
+            }
+            double e = loss->Eval(X, Y);
+            f(r, c) = e;
+         }
+      }
+      count++;
+
+      // octave file format
+      const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+      owf << f.format(OctaveFmt);
+      owf.close();
+   }
 }

@@ -9,13 +9,6 @@
 #include <random>
 #include <functional>
 
-//#define TRACE
-#ifdef TRACE
-   #define DebugOut( a ) std::cout << a;
-#else
-   #define DebugOut( a )
-#endif
-
 using namespace std;
 
 typedef double Number;
@@ -52,10 +45,13 @@ typedef std::vector<double> vector_of_number;
 // unaltered or trasfomed to what is needed by the Jacobian method.
 // The caller is responsible for storing the vector until the 
 // Jacobian is needed.
+// The Resize method is called by the Layer or other parent object to
+// initialize the Activation object to the correct size.
 //
 class iActive{
 public:
    virtual ~iActive() = 0 {};
+   virtual void Resize(int size) = 0;
    virtual ColVector Eval( ColVector& x) = 0;
    virtual ColVector Eval(Eigen::Map<ColVector>& x) = 0;
    virtual Matrix Jacobian(const ColVector& z) = 0;
@@ -63,8 +59,13 @@ public:
 };
 // -------------------------------------------------------
 // ----------- Weight Matrix IO interfaces ---------------
-// Implement the iInitWeights interface by objects that are 
-// used to initialize a network layer.
+// iGetWeights:
+// Implement the iGetWeights interface by objects that are 
+// used to initialize a network layer.  The interface pattern 
+// is somewhat analogous to the visitor pattern.  ReadFC is 
+// called by the (Fully Connected) Layer class and the ReadConvoXXX 
+// functions are called by the (Convolutional) FilterLayer2D class.
+// iPutWeights:
 // Implement the iPutWeights interface by objects that
 // are used by a layer Save method to persist the layer weights.
 //
@@ -73,10 +74,9 @@ public:
    virtual ~iGetWeights () = 0 {};
    virtual void ReadConvoWeight(Matrix& w, int k) = 0;
    virtual void ReadConvoBias(Matrix& w, int k) = 0;
-// This allows implementation to account for the 
-// augmented weight matrix and initialize the bias properly.
-// This is only needed for Init objects.  Read/Write to file
-// takes care of itself.
+   // ReadFC allows the implementation to account for the 
+   // augmented weight matrix and initialize the bias properly.
+   // It is only called by the  Layer class.
    virtual void ReadFC(Matrix& w) = 0;
 };
 
@@ -115,6 +115,7 @@ public:
    virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
 };
 //-----------------------------------------------------------
+
 //---------- Weight initializer and output implementations -----
 
 class IWeightsToConstants : public iGetWeights {
@@ -331,13 +332,18 @@ public:
 };
 //----------------------------------------------------------------
 
-// Activation Functions ------------------------------------------
+//--------------------- Activation Functions ---------------------
 
 class actReLU : public iActive {
    int Size;
    ColVector Temp;
 public:
    actReLU(int size) : Size(size),Temp(size) {}
+   actReLU() : Size(0) {}
+   void Resize(int size) {
+      Size = size;
+      Temp.resize(size);
+   }
    // Z = W x + b.  Z is what is passed into the activation function.
    // It can be modified for use by the Jacobian later.
    ColVector Eval(ColVector& z) {
@@ -367,6 +373,10 @@ class actLeakyReLU : public iActive {
    ColVector Temp;
 public:
    actLeakyReLU(int size, double alp) : Size(size),Temp(size),Alpha(alp) {}
+   actLeakyReLU(double alp) : Size(0), Alpha(alp) {}
+   void Resize(int size) {
+      Temp.resize(size);
+   }
    // Z = W x + b.  Z is what is passed into the activation function.
    // It can be modified for use by the Jacobian later.
    ColVector Eval(ColVector& z) {
@@ -392,18 +402,22 @@ public:
 
 class actSigmoid : public iActive {
    int Size;
-   ColVector SM;
    ColVector J;
    double Sigmoid(double s) {
       return 1.0 / (1.0 + exp(-s));
    }
 public:
-   actSigmoid(int size) : Size(size), SM(size), J(size) {}
+   actSigmoid(int size) : Size(size), J(size) {}
+   actSigmoid() : Size(0) {}
+   void Resize(int size) {
+      Size = size;
+      J.resize(size);
+   }
    // Z = W x + b.  Z is what is passed into the activation function.
    ColVector Eval(ColVector& q) {
       // Vector q carries the z vector on the way in, then is trasformed
       // to the values of the Sigmoid on the way out.  It will later
-      // be passed into the Jacobian method and used to compute the jacobian.
+      // be passed into the Jacobian method and used to compute the Jacobian.
       for (int i = 0; i < Size; i++) {
          q(i) = Sigmoid(q(i));
       }
@@ -431,11 +445,16 @@ class actTanh : public iActive {
    double Tanh(double s) {
       double tp = exp(s);
       double tn = exp(-s);
-      //tsnh = (exp(s) - exp(-s)) / (exp(s) + exp(-s))
+      //tanh = (exp(s) - exp(-s)) / (exp(s) + exp(-s))
       return (tp - tn) / (tp + tn);
    }
 public:
    actTanh(int size) : Size(size), J(size) {}
+   actTanh() : Size(0) {}
+   void Resize(int size) {
+      Size = size;
+      J.resize(size);
+   }
    // Z = W x + b.  Z is what is passed into the activation function.
    ColVector Eval(ColVector& q) {
       // Vector q carries the z vector on the way in, then is trasformed
@@ -467,6 +486,11 @@ class actSoftMax : public iActive {
    Matrix J;
 public:
    actSoftMax(int size) : Size(size), J(size, size) {}
+   actSoftMax() : Size(0) {}
+   void Resize(int size) {
+      Size = size;
+      J.resize(size, size);
+   }
    ColVector Eval(ColVector& q) {
       double sum = 0.0;
       for (int i = 0; i < Size; i++) { q(i) = exp( q(i) ); }
@@ -506,6 +530,11 @@ public:
    actLinear(int size) : Size(size), J(size) {
       J.setOnes();
    }
+   actLinear() : Size(0) {}
+   void Resize(int size) {
+      J.resize(size);
+      J.setOnes();
+   }
    ColVector Eval(ColVector& x) {
       return x;
    }
@@ -524,6 +553,11 @@ class actSquare : public iActive {
    ColVector J;
 public:
    actSquare(int size) : Size(size), J(size) {}
+   actSquare() : Size(0) {}
+   void Resize(int size) {
+      Size = size;
+      J.resize(size);
+   }
    ColVector Eval(ColVector& x) {
       return x*x;
    }
@@ -532,11 +566,34 @@ public:
    }
    Matrix Jacobian(const ColVector& z) {
       J = 2.0 * z;
-      DebugOut( "Jacobian" << endl << J << endl )
       return J.asDiagonal();
    }
 
    int Length() { return Size; }
+};
+
+class iPenality {
+public:
+   virtual ~iPenality() = 0 {};
+   virtual void Update(Matrix& w, Matrix& dw, double eta) = 0;
+};
+
+class penalityNone : public iPenality
+{
+public:
+   void Update(Matrix& w, Matrix& dw, double eta) {
+      w = w - eta * dw.transpose();
+   }
+};
+
+class penalityL2Weight : public iPenality
+{
+   double Strength;
+public:
+   penalityL2Weight(double _strength) : Strength(_strength) {}
+   void Update(Matrix& w, Matrix& dw, double eta) {
+      w = (1.0 - eta*Strength) * w - eta * dw.transpose();
+   }
 };
 
 // Fully Connected Layer ----------------------------------------
@@ -550,9 +607,37 @@ public:
    Matrix W;
    Matrix dW;
    iActive* pActive;
-   std::ofstream fout;
-   bool bout;
-   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit, string filename = "") :
+
+   class iCallBack
+   {
+   public:
+      virtual ~iCallBack() = 0 {};
+      virtual void Propeties(
+         const ColVector& x,
+         const Matrix& w, const Matrix& dw,
+         const ColVector& z) = 0;
+   };
+
+private:
+   shared_ptr<iCallBack> EvalPreActivationCallBack;
+   shared_ptr<iCallBack> EvalPostActivationCallBack;
+   shared_ptr<iCallBack> BackpropCallBack;
+
+   inline void CALLBACK(shared_ptr<iCallBack> icb)
+   {
+      if (icb != nullptr) {
+         icb->Propeties( X, W, dW, Z);
+      }
+   };
+   inline void BACKPROPCALLBACK(shared_ptr<iCallBack> icb, Matrix& iter_dW)
+   {
+      if (icb != nullptr) {
+         icb->Propeties(X, W, iter_dW, Z);
+      }
+   }
+
+public:
+   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit ) :
       // Add an extra row to align with the bias weight.
       // This row should always be set to 1.
       X(input_size+1), 
@@ -564,41 +649,38 @@ public:
       OutputSize(output_size),
       Z(output_size)
    {
-      if (output_size != _pActive->Length()) {
-         throw runtime_error("The activation size and the Layer output size should match.");
-      }
+      _pActive->Resize(output_size); 
 
       _pInit->ReadFC(W);
 
       dW.setZero();
       Count = 0;
-
-      bout = false;
-      if (filename.length() > 0) {
-         fout.open(filename, ios::trunc);
-         assert(fout.is_open());
-         bout = true;
-      }
    }
    ~Layer() {
       delete pActive;
-      fout.close();
    }
 
    ColVector Eval(const ColVector& _x) {
-      X.topRows(InputSize) = _x;
-      X(InputSize) = 1;  // This accounts for the bias weight.
+      X.topRows(InputSize) = _x;   // Will throw an exception if _x.size != InputSize
+      X(InputSize) = 1;            // This accounts for the bias weight.
       Z = W * X;
+      CALLBACK(EvalPreActivationCallBack);
+      // NOTE: The Active classes use the flyweight pattern.
+      //       Z is an in/out variable, its contents may be modified by Eval
+      //       but its dimension will not be changed.
+      if (EvalPostActivationCallBack != nullptr) {
+         ColVector out = pActive->Eval( Z );
+         EvalPostActivationCallBack->Propeties( X, W, dW, Z);
+         return out;
+      }
       return pActive->Eval( Z );
    }
 
    RowVector BackProp(const RowVector& child_grad, bool want_layer_grad = true ) {
       Count++;
       RowVector delta_grad = child_grad * pActive->Jacobian(Z);
-      DebugOut( "W: " << W.maxCoeff() << endl )
-      DebugOut( "child_grad: " << child_grad.cwiseAbs().maxCoeff() << " delta_grad: " << delta_grad.cwiseAbs().maxCoeff() << endl )
       Matrix iter_w_grad = X * delta_grad;
-      DebugOut("X: " << X.cwiseAbs().maxCoeff() << ", iter_w_grad: " << iter_w_grad.cwiseAbs().maxCoeff() << endl )
+      BACKPROPCALLBACK(BackpropCallBack, iter_w_grad);
       double a = 1.0 / (double)Count;
       double b = 1.0 - a;
       dW = a * iter_w_grad + b * dW;
@@ -614,22 +696,26 @@ public:
    void Update(double eta) {
       Count = 0;
       W = W - eta * dW.transpose();
-      DebugOut( "-------- UPDATE --------" << endl <<
-         "grad T: " << dW.cwiseAbs().maxCoeff() << endl <<
-         "W: " << W.cwiseAbs().maxCoeff() << endl )
-      if (bout) {
-         fout << W(0, 0) << "," << W(0, 1) << "," << dW(0, 0) << "," << dW(1, 0) << endl;
-      }
+      dW.setZero();  // Not strictly needed.
+   }
 
-      dW.setZero();
+   void Update(double eta, shared_ptr<iPenality> ipen) {
+      Count = 0;
+      ipen->Update(W, dW, eta);
+      dW.setZero();  // Not strictly needed.
    }
 
    void Save(shared_ptr<iPutWeights> _pOut) {
       _pOut->Write(W, 1);
       cout << "Weights saved" << endl;
    }
+
+   void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBack> icb) {  BackpropCallBack = icb; }
 };
 //---------------------------------------------------------------
+
 // Convolution Layer classes ------------------------------------
 #define BACKPROP_CALLBACK_PREP \
 if( BackpropCallBack!=nullptr ){ \
@@ -707,9 +793,7 @@ public:
       Channels(input_channels),
       NoBias(no_bias)
    {
-      if (output_size.rows * output_size.cols != _pActive->Length()) {
-         throw runtime_error("The activation size and the Layer output size should match.");
-      }
+      _pActive->Resize(output_size.rows * output_size.cols); 
 
       for (Matrix& m : X) { 
          m.resize(input_size.rows + input_padding, input_size.cols + input_padding); 
@@ -980,7 +1064,7 @@ public:
 };
 #undef BACKPROP_CALLBACK_PREP
 
-class MaxPool2D : public iConvoLayer {
+class poolMax2D : public iConvoLayer {
 public:
    Size InputSize;
    Size OutputSize;
@@ -995,7 +1079,7 @@ public:
    vector_of_matrix_i Zr;
    vector_of_matrix_i Zc;
 
-   MaxPool2D(Size input_size, int input_channels, Size output_size) :
+   poolMax2D(Size input_size, int input_channels, Size output_size) :
       X(input_channels),
       Z(input_channels),
       Zr(input_channels),
@@ -1012,7 +1096,7 @@ public:
       for (iMatrix& m : Zr) { m.resize(output_size.rows, output_size.cols); }
       for (iMatrix& m : Zc) { m.resize(output_size.rows, output_size.cols); }
    }
-   ~MaxPool2D() {
+   ~poolMax2D() {
    }
    void MaxPool( Matrix g, Matrix& out, iMatrix& maxr, iMatrix& maxc )
    {
@@ -1078,7 +1162,7 @@ public:
    }
 };
 
-class AvgPool2D : public iConvoLayer {
+class poolAvg2D : public iConvoLayer {
    double Denominator;
    int rstep;
    int cstep;
@@ -1092,7 +1176,7 @@ public:
    // Used for output.
    vector_of_matrix Z;
 
-   AvgPool2D(Size input_size, int input_channels, Size output_size) :
+   poolAvg2D(Size input_size, int input_channels, Size output_size) :
       X(input_channels),
       Z(input_channels),
       InputSize(input_size),
@@ -1110,7 +1194,7 @@ public:
 
       for (Matrix& m : Z) { m.resize(output_size.rows, output_size.cols); }
    }
-   ~AvgPool2D() {
+   ~poolAvg2D() {
    }
    void AveragePool( Matrix g, Matrix& out )
    {
@@ -1182,7 +1266,7 @@ public:
    }
 };
 
-class MaxPool3D : public iConvoLayer {
+class poolMax3D : public iConvoLayer {
 public:
    Size InputSize;
    Size OutputSize;
@@ -1201,7 +1285,7 @@ public:
    vector_of_matrix_i Zc;
    vector_of_matrix_i Zm;
 
-   MaxPool3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) :
+   poolMax3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) :
       X(input_channels),
       Z(output_channels),
       Zr(output_channels),
@@ -1222,7 +1306,7 @@ public:
       for (iMatrix& m : Zc) { m.resize(output_size.rows, output_size.cols); }
       for (iMatrix& m : Zm) { m.resize(output_size.rows, output_size.cols); }
    }
-   ~MaxPool3D() {
+   ~poolMax3D() {
    }
    void MaxPool( const vector_of_matrix& g, iColVector& m, Matrix& out, iMatrix& maxr, iMatrix& maxc, iMatrix& maxm )
    {
@@ -1303,7 +1387,7 @@ public:
    {
    }
 };
-class AvgPool3D : public iConvoLayer {
+class poolAvg3D : public iConvoLayer {
 public:
    Size InputSize;
    Size OutputSize;
@@ -1319,7 +1403,7 @@ public:
    // Used for output.
    vector_of_matrix Z;
 
-   AvgPool3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) :
+   poolAvg3D(Size input_size, int input_channels, Size output_size, int output_channels, vector_of_colvector_i& output_map) :
       X(input_channels),
       Z(output_channels),
       InputSize(input_size),
@@ -1337,7 +1421,7 @@ public:
 
       for (Matrix& m : Z) { m.resize(output_size.rows, output_size.cols); }
    }
-   ~AvgPool3D() {
+   ~poolAvg3D() {
    }
    void AvgPool( const vector_of_matrix& g, iColVector& m, Matrix& out )
    {
@@ -1486,7 +1570,7 @@ public:
 
 //--------------------------------------------------------------
 
-// ------------ Loss Layer
+// ------------ Loss Layer -------------------------------------
 class LossL2 : public iLossLayer{
 public:
    int Size;
@@ -1510,10 +1594,11 @@ public:
    //         Weight decay is sum of all layer weights squared.  A scalar.
    //         The derivitive seems to be a matrix which is incompatiable 
    //         with the RowVector.
+   //         I got it.  If you want to regularize, just add lamda*W to delta W at
+   //         each layer before update.
    //         http://ufldl.stanford.edu/tutorial/supervised/MultiLayerNeuralNetworks/
 
    RowVector LossGradient(void) {
-      DebugOut("Loss gradiant : " << 2.0 * Z.transpose() << endl)
       return 2.0 * Z.transpose();
    }
 };
@@ -1552,7 +1637,6 @@ public:
    //         http://ufldl.stanford.edu/tutorial/supervised/MultiLayerNeuralNetworks/
 
    RowVector LossGradient(void) {
-      DebugOut("Loss gradiant : " << 2.0 * Z.transpose() << endl)
       return 4.0 * Z.transpose();
    }
 };
@@ -1613,8 +1697,6 @@ public:
                G[i] = 0.0;
                cout << "Loss Gradient encountered div by zero" << endl; // Debug
             }
-            //G[i] = (Y[i] == 0.0 ? 0.0 : -10.0);
-            //G[i] = 0.0;
          }
          else {
             G[i] = -Y[i] / X[i];
@@ -1624,12 +1706,12 @@ public:
    }
 };
 
-class LossClassifierStats
+class ClassifierStats
 {
 public:
    int Correct;
    int Incorrect;
-   LossClassifierStats() : Correct(0), Incorrect(0) {}
+   ClassifierStats() : Correct(0), Incorrect(0) {}
    void Eval(const ColVector& x, const ColVector& y) {
       assert(x.size() == y.size());
       int y_max_index = 0;
