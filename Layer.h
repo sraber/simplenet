@@ -572,30 +572,6 @@ public:
    int Length() { return Size; }
 };
 
-class iPenality {
-public:
-   virtual ~iPenality() = 0 {};
-   virtual void Update(Matrix& w, Matrix& dw, double eta) = 0;
-};
-
-class penalityNone : public iPenality
-{
-public:
-   void Update(Matrix& w, Matrix& dw, double eta) {
-      w = w - eta * dw.transpose();
-   }
-};
-
-class penalityL2Weight : public iPenality
-{
-   double Strength;
-public:
-   penalityL2Weight(double _strength) : Strength(_strength) {}
-   void Update(Matrix& w, Matrix& dw, double eta) {
-      w = (1.0 - eta*Strength) * w - eta * dw.transpose();
-   }
-};
-
 // Fully Connected Layer ----------------------------------------
 class Layer {
 public:
@@ -696,12 +672,6 @@ public:
    void Update(double eta) {
       Count = 0;
       W = W - eta * dW.transpose();
-      dW.setZero();  // Not strictly needed.
-   }
-
-   void Update(double eta, shared_ptr<iPenality> ipen) {
-      Count = 0;
-      ipen->Update(W, dW, eta);
       dW.setZero();  // Not strictly needed.
    }
 
