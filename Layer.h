@@ -12,11 +12,11 @@
 using namespace std;
 
 typedef double Number;
-typedef Eigen::MatrixXd Matrix;
-typedef Eigen::MatrixXi iMatrix;
-typedef Eigen::RowVectorXd RowVector;
-typedef Eigen::VectorXd ColVector;
-typedef Eigen::VectorXi iColVector;
+typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic, Eigen::RowMajor> Matrix;
+typedef Eigen::Matrix<int,Eigen::Dynamic,Eigen::Dynamic, Eigen::RowMajor> iMatrix;
+typedef Eigen::Matrix<double,1,Eigen::Dynamic, Eigen::RowMajor> RowVector;
+typedef Eigen::Matrix<double,Eigen::Dynamic, 1, Eigen::RowMajor> ColVector;
+typedef Eigen::Matrix<int,Eigen::Dynamic, 1, Eigen::RowMajor> iColVector;
 
 typedef  std::vector<Matrix> vector_of_matrix;
 typedef  std::vector<RowVector> vector_of_rowvector;
@@ -126,11 +126,11 @@ public:
    void ReadConvoWeight(Matrix& w, int k) {
       w.setConstant(Weight);
    }
-   void ReadConvoBias(Matrix& w, int k){
-      w.setConstant(Weight);
+   void ReadConvoBias(Matrix& b, int k){
+      b.setConstant(Bias);
    }
    void ReadFC(Matrix& w){
-      w.setConstant(Bias);
+      w.setConstant(Weight);
       w.rightCols(1).setConstant(Bias);
    }
 };
@@ -572,6 +572,45 @@ public:
    int Length() { return Size; }
 };
 
+class iPenality {
+public:
+   virtual ~iPenality() = 0 {};
+   virtual void Update(Matrix& w, Matrix& dw, double eta) = 0;
+   virtual double Error(Matrix& w) = 0;
+};
+
+class penalityNone : public iPenality
+{
+public:
+   void Update(Matrix& w, Matrix& dw, double eta) {
+      w -= eta * dw.transpose();
+   }
+   double Error(Matrix& w) {
+      return 0.0;
+   }
+};
+
+class penalityL2Weight : public iPenality
+{
+   double Strength;
+   double TheError;
+   bool Dirty;
+public:
+   penalityL2Weight(double _strength) : Strength(_strength), Dirty(true), TheError(0.0) {}
+   void Update(Matrix& w, Matrix& dw, double eta) {
+      Dirty = true;
+      w = (1.0 - eta*Strength) * w - eta * dw.transpose();
+   }
+   double Error(Matrix& w) {
+      if (Dirty) {
+         Dirty = false;
+         // Is Eigen wonderful or what!!
+         TheError = 0.5 * Strength * w.squaredNorm();
+      }
+      return TheError;
+   }
+};
+
 // Fully Connected Layer ----------------------------------------
 class Layer {
 public:
@@ -594,7 +633,9 @@ public:
          const ColVector& z) = 0;
    };
 
+   shared_ptr<iPenality> spPenality;
 private:
+
    shared_ptr<iCallBack> EvalPreActivationCallBack;
    shared_ptr<iCallBack> EvalPostActivationCallBack;
    shared_ptr<iCallBack> BackpropCallBack;
@@ -613,7 +654,7 @@ private:
    }
 
 public:
-   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit ) :
+   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit, shared_ptr<iPenality> _pPenality =  make_shared<penalityNone>() ) :
       // Add an extra row to align with the bias weight.
       // This row should always be set to 1.
       X(input_size+1), 
@@ -625,6 +666,7 @@ public:
       OutputSize(output_size),
       Z(output_size)
    {
+      spPenality = _pPenality;
       _pActive->Resize(output_size); 
 
       _pInit->ReadFC(W);
@@ -632,6 +674,7 @@ public:
       dW.setZero();
       Count = 0;
    }
+
    ~Layer() {
       delete pActive;
    }
@@ -671,13 +714,17 @@ public:
 
    void Update(double eta) {
       Count = 0;
-      W = W - eta * dW.transpose();
+      spPenality->Update(W, dW, eta);
       dW.setZero();  // Not strictly needed.
    }
 
    void Save(shared_ptr<iPutWeights> _pOut) {
       _pOut->Write(W, 1);
       cout << "Weights saved" << endl;
+   }
+
+   double PenalityError() {
+      return spPenality->Error(W);
    }
 
    void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
@@ -806,7 +853,8 @@ public:
    }
 
    // NOTE: There is a 1-off issue when the out matrix dimension is odd.
-   void LinearCorrelate( const Matrix g, const Matrix h, Matrix& out, double bias = 0.0 )
+   // REVIEW... this is passing by value!!!
+   void LinearCorrelate( const Matrix& g, const Matrix& h, Matrix& out, double bias = 0.0 )
    {
       for (int r = 0; r < out.rows(); r++) {
          for (int c = 0; c < out.cols(); c++) {
@@ -1068,7 +1116,7 @@ public:
    }
    ~poolMax2D() {
    }
-   void MaxPool( Matrix g, Matrix& out, iMatrix& maxr, iMatrix& maxc )
+   void MaxPool( const Matrix& g, Matrix& out, iMatrix& maxr, iMatrix& maxc )
    {
       int rstep = (int)floor((float)g.rows() / (float)out.rows());
       int cstep = (int)floor((float)g.cols() / (float)out.cols());
@@ -1097,7 +1145,7 @@ public:
       }
    }
 
-   void BackPool(Matrix& out, Matrix dw, iMatrix mr, iMatrix mc)
+   void BackPool(Matrix& out, const Matrix& dw, const iMatrix& mr, const iMatrix& mc)
    {
       out.setZero();
       for (int r = 0; r < dw.rows(); r++) {
@@ -1166,7 +1214,7 @@ public:
    }
    ~poolAvg2D() {
    }
-   void AveragePool( Matrix g, Matrix& out )
+   void AveragePool( const Matrix& g, Matrix& out )
    {
       assert(out.rows() == OutputSize.rows && out.cols() == OutputSize.cols);
       for (int r = 0; r < OutputSize.rows; r++) {
@@ -1186,7 +1234,7 @@ public:
       }
    }
 
-   void BackPool(Matrix& out, Matrix dw)
+   void BackPool(Matrix& out, const Matrix& dw)
    {
       // REVIEW: It is possible that a combination of parameters could lead
       //         to a down-sample that does not reach some rows and columns of
@@ -1318,7 +1366,7 @@ public:
       }
    }
 
-   void BackPool(vector_of_matrix& out, Matrix dw, iMatrix maxr, iMatrix maxc, iMatrix maxm)
+   void BackPool(vector_of_matrix& out, const Matrix& dw, const iMatrix& maxr, const iMatrix& maxc, const iMatrix& maxm)
    {
 
       for (int r = 0; r < dw.rows(); r++) {
@@ -1393,7 +1441,7 @@ public:
    }
    ~poolAvg3D() {
    }
-   void AvgPool( const vector_of_matrix& g, iColVector& m, Matrix& out )
+   void AvgPool( const vector_of_matrix& g, const iColVector& m, Matrix& out )
    {
       double denominator = (double)(rstep * cstep * m.size());
 
@@ -1419,7 +1467,7 @@ public:
       }
    }
 
-   void BackPool( vector_of_matrix& g, iColVector& m, const Matrix dw )
+   void BackPool( vector_of_matrix& g, const iColVector& m, const Matrix& dw )
    {
       double denominator = (double)(rstep * cstep * m.size());
 
