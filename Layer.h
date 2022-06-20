@@ -12,11 +12,11 @@
 using namespace std;
 
 typedef double Number;
-typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic, Eigen::RowMajor> Matrix;
-typedef Eigen::Matrix<int,Eigen::Dynamic,Eigen::Dynamic, Eigen::RowMajor> iMatrix;
-typedef Eigen::Matrix<double,1,Eigen::Dynamic, Eigen::RowMajor> RowVector;
-typedef Eigen::Matrix<double,Eigen::Dynamic, 1, Eigen::RowMajor> ColVector;
-typedef Eigen::Matrix<int,Eigen::Dynamic, 1, Eigen::RowMajor> iColVector;
+typedef Eigen::MatrixXd Matrix;
+typedef Eigen::MatrixXi iMatrix;
+typedef Eigen::RowVectorXd RowVector;
+typedef Eigen::VectorXd ColVector;
+typedef Eigen::VectorXi iColVector;
 
 typedef  std::vector<Matrix> vector_of_matrix;
 typedef  std::vector<RowVector> vector_of_rowvector;
