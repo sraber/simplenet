@@ -10,6 +10,11 @@
 #include <math.h>
 #include <amoeba.h>
 
+#include <time.h>
+
+#include "fft1.h"
+#include "fftn.h"
+
 string path = "C:\\projects\\neuralnet\\simplenet\\algors\\results";
 
 void MakeMNISTImage(string file, Matrix m)
@@ -35,6 +40,29 @@ void MakeMNISTImage(string file, Matrix m)
    generateBitmapImage(pbytes, 28, 28, 28 * sizeof(pixel_data), file);
 }
 
+void MakeMatrixImage(string file, Matrix m)
+{
+   pixel_data pixel;
+   int rows = (int)m.rows();
+   int cols = (int)m.cols();
+
+   unsigned char* pbytes = new unsigned char[rows * cols * sizeof(pixel_data)]; // 24 bit BMP
+   unsigned char* pbs = pbytes;
+   for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+         double v = m(r, c) * 254;
+         pixel.r = static_cast<unsigned char>(v);
+         pixel.g = static_cast<unsigned char>(v);
+         pixel.b = static_cast<unsigned char>(v);
+
+         std::memcpy(pbs, &pixel, sizeof(pixel_data));
+         pbs += sizeof(pixel_data);
+      }
+   }
+
+   generateBitmapImage(pbytes, rows, cols, cols * sizeof(pixel_data), file);
+}
+
 void ScaleToOne(double* pdata, int size)
 {
    double max = 0.0;
@@ -45,8 +73,15 @@ void ScaleToOne(double* pdata, int size)
       if (max < *pd) { max = *pd; }
       if (min > * pd) { min = *pd; }
    }
-   for (pd = pdata; pd < pde; pd++) {
-      *pd = (*pd - min) / (max - min);
+   if (max == min) {
+      for (pd = pdata; pd < pde; pd++) {
+         *pd = 0.0;
+      }
+   }
+   else {
+      for (pd = pdata; pd < pde; pd++) {
+         *pd = (*pd - min) / (max - min);
+      }
    }
 }
 
@@ -72,16 +107,22 @@ int GetMNISTLabel(ColVector& lv)
    return 0;
 }
 
-// NOTE: There is a 1-off issue when the out matrix dimension is odd.
-void LinearCorrelate( Matrix g, Matrix h, Matrix& out )
+void LinearConvolution( Matrix g, Matrix h, Matrix& out )
 {
-   for (int r = 0; r < out.rows(); r++) {
+   int gr2 = g.rows() >> 1; if (!(gr2 % 2)) { gr2--; }
+   int gc2 = g.cols() >> 1; if (!(gc2 % 2)) { gc2--; }
+   int hr2 = h.rows() >> 1; if (!(hr2 % 2)) { hr2--; }
+   int hc2 = h.cols() >> 1; if (!(hc2 % 2)) { hc2--; }
+   int or2 = out.rows() >> 1; if (!(or2 % 2)) { or2--; }
+   int oc2 = out.cols() >> 1; if (!(oc2 % 2)) { oc2--; }
+
+   for (int r = 0; r < out.rows(); r++) {     // 0 to rows --> -On/2+1 to On/2 if On is even, else -On/2 to On/2.
       for (int c = 0; c < out.cols(); c++) {
          double sum = 0.0;
-         for (int rr = 0; rr < h.rows(); rr++) {
-            for (int cc = 0; cc < h.cols(); cc++) {
-               int gr = r + rr + 1;
-               int gc = c + cc + 1;
+         for (int rr = 0; rr < h.rows(); rr++) {      // 0 to rows --> -N/2 to N/2 
+            for (int cc = 0; cc < h.cols(); cc++) {   // 0 to cols --> -M to M --> odd numbered kernels work well becuse they are 2*M+1.
+               int gr = r - rr + gr2 + hr2 - or2;                 // r and c are the correlation plane
+               int gc = c - cc + gc2 + hc2 - oc2;                 // coordinates.
                if (gr >= 0 && gr < g.rows() && 
                      gc >= 0 && gc < g.cols()) {
                   sum += g(gr, gc) * h(rr, cc);
@@ -93,17 +134,42 @@ void LinearCorrelate( Matrix g, Matrix h, Matrix& out )
    }
 }
 
-void LinearConvolution( Matrix g, Matrix h, Matrix& out )
+//void LinearCorrelate( Matrix& g, Matrix& h, Matrix& out )
+//{
+//   for (int r = 0; r < out.rows(); r++) {     // 0 to rows --> -On to On
+//      for (int c = 0; c < out.cols(); c++) {
+//         double sum = 0.0;
+//         for (int rr = 0; rr < h.rows(); rr++) {      // 0 to rows --> -N to N 
+//            for (int cc = 0; cc < h.cols(); cc++) {   // 0 to cols --> -M to M --> odd numbered kernels work well becuse they are 2*M+1.
+//               int gr = r + rr;                       // r and c are the correlation plane
+//               int gc = c + cc;                       // coordinates.
+//               if (gr >= 0 && gr < g.rows() && 
+//                     gc >= 0 && gc < g.cols()) {
+//                  sum += g(gr, gc) * h(rr, cc);
+//               }
+//            }
+//         }
+//         out(r, c) = sum;
+//      }
+//   }
+//}
+
+void LinearCorrelate( Matrix& g, Matrix& h, Matrix& out )
 {
-   int hr2 = h.rows() >> 1;
-   int hc2 = h.cols() >> 1;
-   for (int r = 0; r < out.rows(); r++) {
+   int gr2 = g.rows() >> 1; if (!(gr2 % 2)) { gr2--; }
+   int gc2 = g.cols() >> 1; if (!(gc2 % 2)) { gc2--; }
+   int hr2 = h.rows() >> 1; if (!(hr2 % 2)) { hr2--; }
+   int hc2 = h.cols() >> 1; if (!(hc2 % 2)) { hc2--; }
+   int or2 = out.rows() >> 1; if (!(or2 % 2)) { or2--; }
+   int oc2 = out.cols() >> 1; if (!(oc2 % 2)) { oc2--; }
+
+   for (int r = 0; r < out.rows(); r++) {     // 0 to rows --> -On to On
       for (int c = 0; c < out.cols(); c++) {
          double sum = 0.0;
-         for (int rr = 0; rr < h.rows(); rr++) {
-            for (int cc = 0; cc < h.cols(); cc++) {
-               int gr = r - rr + hr2; // not sure the signs are right or the order is correct.  rr - r ??
-               int gc = c - cc + hc2;
+         for (int rr = 0; rr < h.rows(); rr++) {      // 0 to rows --> -N to N 
+            for (int cc = 0; cc < h.cols(); cc++) {   // 0 to cols --> -M to M --> odd numbered kernels work well becuse they are 2*M+1.
+               int gr = r + rr + gr2 - hr2 - or2;                 // r and c are the correlation plane
+               int gc = c + cc + gc2 - hc2 - oc2;                 // coordinates.
                if (gr >= 0 && gr < g.rows() && 
                      gc >= 0 && gc < g.cols()) {
                   sum += g(gr, gc) * h(rr, cc);
@@ -111,6 +177,171 @@ void LinearConvolution( Matrix g, Matrix h, Matrix& out )
             }
          }
          out(r, c) = sum;
+      }
+   }
+}
+
+double MultiplyBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
+{
+   double sum = 0.0;
+   for (int r = 0; r < size_r; r++) {
+      for (int c = 0; c < size_c; c++) {
+         sum += m(mr+r, mc+c) * h(hr+r, hc+c);
+      }
+   }
+   return sum;
+}
+
+double MultiplyBlock1( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
+{
+   double sum = (m.array().block(mr, mc, size_r, size_c) * h.array().block(hr, hc, size_r, size_c)).sum();
+
+   return sum;
+}
+
+void LinearCorrelate3( Matrix& m, Matrix& h, Matrix& out )
+{
+   const int hrows = h.rows();
+   const int hcols = h.cols();
+   const int mrows = m.rows();
+   const int mcols = m.cols();
+   int mr2 = mrows >> 1; if (!(mr2 % 2)) { mr2--; }
+   int mc2 = mcols >> 1; if (!(mc2 % 2)) { mc2--; }
+   int hr2 = hrows >> 1; if (!(hr2 % 2)) { hr2--; }
+   int hc2 = hcols >> 1; if (!(hc2 % 2)) { hc2--; }
+   int or2 = out.rows() >> 1; if (!(or2 % 2)) { or2--; }
+   int oc2 = out.cols() >> 1; if (!(oc2 % 2)) { oc2--; }
+
+   for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
+      for (int c = 0; c < out.cols(); c++) {
+         int h1r, h1c;
+         int m1r, m1c;
+         m1r = r + mr2 - or2 - hr2;
+         m1c = c + mc2 - oc2 - hc2;
+
+         int shr = hrows;
+         if (m1r < 0) {
+            shr += m1r;
+            m1r = 0;
+            h1r = hrows - shr;
+         }
+         else {
+            h1r = 0;
+            shr = hrows;
+            if (m1r + shr > mrows) {
+               shr = mrows - m1r;
+            }
+         }
+
+         int shc = hcols;
+         if (m1c < 0) {
+            shc += m1c;
+            m1c = 0;
+            h1c = hcols - shc;
+         }
+         else {
+            h1c = 0;
+            shc = hcols;
+            if (m1c + shc > mcols) {
+               shc = mcols - m1c;
+            }
+         }
+         if (shr <= 0 || shc <= 0) {
+            out(r, c) = 0.0;
+         }
+         else {
+            //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+            out(r, c) = MultiplyBlock(m, m1r, m1c, h, h1r, h1c, shr, shc);
+         }
+      }
+   }
+}
+
+// Use Eigen blocks to do the correlation.
+void LinearCorrelate1( int pr, int pc, Matrix& m, Matrix& h, Matrix& out )
+{
+   const int hrows = h.rows();
+   const int hcols = h.cols();
+   const int mrows = m.rows();
+   const int mcols = m.cols();
+   for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
+      for (int c = 0; c < out.cols(); c++) {
+         int h1r, h1c;
+         int m1r, m1c;
+
+         int shr = hrows;
+         if (r < pr) {
+            h1r = pr - r;
+            m1r = 0;
+            shr = hrows - h1r;
+         }
+         else {
+            h1r = 0;
+            m1r = r - pr;
+            if (m1r + shr > mrows) {
+               shr = mrows - m1r;
+            }
+         }
+
+         int shc = hcols;
+         if (c < pc) {
+            h1c = pc - c;
+            m1c = 0;
+            shc = hcols - h1c;
+         }
+         else {
+            h1c = 0;
+            m1c = c - pc;
+            if (m1c + shc > mcols) {
+               shc = mcols - m1c;
+            }
+         }
+         //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+         out(r, c) = MultiplyBlock(m,m1r,m1c,h,h1r,h1c,shr,shc);
+      }
+   }
+}
+
+void LinearCorrelate2( int pr, int pc, Matrix& m, Matrix& h, Matrix& out )
+{
+   const int hrows = h.rows();
+   const int hcols = h.cols();
+   const int mrows = m.rows();
+   const int mcols = m.cols();
+   for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
+      for (int c = 0; c < out.cols(); c++) {
+         int h1r, h1c;
+         int m1r, m1c;
+
+         int shr = hrows;
+         if (r < pr) {
+            h1r = pr - r;
+            m1r = 0;
+            shr = hrows - h1r;
+         }
+         else {
+            h1r = 0;
+            m1r = r - pr;
+            if (m1r + shr > mrows) {
+               shr = mrows - m1r;
+            }
+         }
+
+         int shc = hcols;
+         if (c < pc) {
+            h1c = pc - c;
+            m1c = 0;
+            shc = hcols - h1c;
+         }
+         else {
+            h1c = 0;
+            m1c = c - pc;
+            if (m1c + shc > mcols) {
+               shc = mcols - m1c;
+            }
+         }
+         //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+         out(r, c) = MultiplyBlock1(m,m1r,m1c,h,h1r,h1c,shr,shc);
       }
    }
 }
@@ -310,12 +541,32 @@ void TestFilter(bool b_convolution, string name)
       itodl[9] = 4;
 
       Matrix h(28, 28);
-      TrasformMNISTtoMatrix(h, dl[ itodl[2] ].x );
+      TrasformMNISTtoMatrix(h, dl[ itodl[4] ].x );
       ScaleToOne(h.data(), h.rows() * h.cols());
+
+      Matrix h1(7, 7);
+      h1 = h.block(14, 14, 7, 7);
+
+      Matrix sx(3, 3);
+      sx.setZero();
+      sx(0, 0) = 1;  sx(0, 2) = -1;
+      sx(1, 0) = 2;  sx(1, 2) = -2;
+      sx(2, 0) = 1;  sx(2, 2) = -1;
+
+      Matrix sy(3, 3);
+      sy.setZero();
+      sy(0, 0) = 1;  sy(2, 0) = -1;
+      sy(0, 1) = 2;  sy(2, 1) = -2;
+      sy(0, 2) = 1;  sy(2, 2) = -1;
+
+      Matrix s(3, 3);
+      //LinearConvolution(sx, sy, s);
+      s.setConstant(-1);
+      s(1, 1) = 4; 
 
 
       Matrix m(28, 28);
-      TrasformMNISTtoMatrix(m, dl[ itodl[2] ].x );
+      TrasformMNISTtoMatrix(m, dl[ itodl[4] ].x );
       ScaleToOne(m.data(), m.rows() * m.cols());
 
 
@@ -323,7 +574,7 @@ void TestFilter(bool b_convolution, string name)
       g.setZero();
       g.block(14, 14,28,28) = m;
 
-      Matrix o(28,28);
+      Matrix o(64,64);
       if (b_convolution) {
          // This shows that rotating the filter 180 deg turns the convolution 
          // into a correlation.  Why might we prefer convolution to correlation?
@@ -333,14 +584,52 @@ void TestFilter(bool b_convolution, string name)
          //    h * (d * m) = (h * d) * m
          // Not true for correlation.
          //Rotate180(h);
-         LinearConvolution(m, h, o);
+         LinearConvolution(g, s, o);
+         //LinearConvolution(g, sx, o);
+         //LinearConvolution(g, sy, o);
       }
       else {
-         LinearCorrelate(m, h, o);
+         //LinearCorrelate(g, h1, o);
+         LinearCorrelate3(m, h, o);
+         //LinearCorrelate2(14, 14, m, h, o);
+         //clock_t start, end;
+         //start=clock();
+         //for (int i = 0; i < 5000; i++) {
+         //   LinearCorrelate(g, h, o);
+         //}
+         //end=clock();
+         //cout << "LinCor:" << (double)(end - start) / double(CLOCKS_PER_SEC) << endl;
+
+         //start=clock();
+         //for (int i = 0; i < 5000; i++) {
+         //   LinearCorrelate1(14, 14, m, h, o);
+         //}
+         //end=clock();
+         //cout << "LinCor1:" << (double)(end - start) / double(CLOCKS_PER_SEC) << endl;
+
+         //start=clock();
+         //for (int i = 0; i < 5000; i++) {
+         //   LinearCorrelate2(14, 14, m, h, o);
+         //}
+         //end=clock();
+         //cout << "LinCor2:" << (double)(end - start) / double(CLOCKS_PER_SEC) << endl;
+
+         //char c;
+         //cin >> c;
+         //exit(0);
       }
       ScaleToOne(o.data(), o.rows() * o.cols());
 
-      MakeMNISTImage("C:\\projects\\neuralnet\\simplenet\\algors\\results\\" + name + ".bmp", o);
+      string fileroot = "C:\\projects\\neuralnet\\simplenet\\algors\\results\\";
+
+      MakeMatrixImage(fileroot + name + ".bmp", o);
+
+      ofstream owf(fileroot + name + ".csv", ios::trunc);
+
+      // octave file format
+      const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+      owf << o.format(OctaveFmt);
+      owf.close();
 
 }
 
@@ -385,7 +674,70 @@ void test_amoeba()
 int main()
 {
     std::cout << "Hello World!\n";
-    TestFilter(true, "convo3");
+    //TestFilter(false , "cor3");
+
+    ColVector vec1(256);
+    vec1.setZero();
+    for (int i = 0; i < 256; i++) {
+       // Add some harmonics
+       for (int h = 6; h <= 64; h += 6) {
+          vec1(i) += 0.1 * sin((double)h * M_PI * (double)i / 256.0);
+       }
+
+       // Add a high frequency component for fun
+       vec1(i) += 0.05 * sin(128.0 * M_PI * (double)i / 256.0);
+    }
+
+    ColVector vec2(256);
+    vec2.setZero();
+    for (int i = 0; i < 256; i++) {
+       // Add some odd harmonics
+       for (int h = 9; h <= 64; h += 9) {
+          vec2(i) += 0.1 * sin((double)h * M_PI * (double)i / 256.0);
+       }
+
+       // Add a different high frequency component for fun
+       vec2(i) += 0.05 * sin(100.0 * M_PI * (double)i / 256.0);
+    }
+
+    ColVector a1(256);
+    a1 = vec1 + vec2;
+
+    rfftsine(vec1.data(), vec1.size(), 1);
+    rfftsine(vec2.data(), vec2.size(), 1);
+
+    vec1 *= (1.0 / 128.0);
+    vec2 *= (1.0 / 128.0);
+
+    ColVector s(128);
+    int j = 1;
+    for (int i = 2; i < 256; i += 2, j++) {
+       double re = vec1(i);
+       double im = vec1(i + 1);
+       s(j) = sqrt(re * re + im * im);
+    }
+    s(0) = vec1(0);
+    s(127) = vec1(1);
+
+    ColVector a2(256);
+    a2 = vec1 + vec2;
+    rfftsine(a2.data(), a2.size(), -1);
+
+   ofstream owf(path + "\\vec1.spectrum.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << s;
+   owf.close();
+
+   owf.open(path + "\\a1.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << a1;
+   owf.close();
+
+   owf.open(path + "\\a2.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << a2;
+
+   exit(0);
 
    //test_amoeba();
    //exit(0);

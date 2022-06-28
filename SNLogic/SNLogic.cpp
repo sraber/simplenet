@@ -30,6 +30,7 @@ typedef list<tup> tup_list;
 
 void MakeDecsionSurface( string fileroot );
 void MakeErrorSurface(tup_list points);
+void MakeAvgErrorSurface(tup_list points);
 
 void MakePointCloud(tup_list& tuples, double xc, double yc, int label, int n)
 {
@@ -61,6 +62,9 @@ void MakePointRing(tup_list& tuples, double xc, double yc, double radius, int la
       cv = lli->Eval(cv);\
    }\
    e = loss->Eval(cv, y);\
+   for (const auto& lit : LayerList) {\
+      e += lit->PenalityError();\
+   }\
 }
 
 void TestGradComp(tup t)
@@ -90,7 +94,10 @@ void TestGradComp(tup t)
       riter++) {
       g = (*riter)->BackProp(g);
    } 
-   dwt = ipcl->dW.transpose();
+   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   // The strength of the L2 regularize is hardcoded here       !!
+   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   dwt = ipcl->dW.transpose() + 0.1*ipcl->W;
 
    for (int r = 0; r < rows; r++) {
       for (int c = 0; c < cols; c++) {
@@ -111,7 +118,6 @@ void TestGradComp(tup t)
 
          double grad1 = dwt(r, c);
          double grad = (f2 - f1) / (2.0*eta);
-         //double grad = (f2 - f1) / eta;
 
          dif(r, c) = abs(grad - grad1);
       }
@@ -131,19 +137,22 @@ void TestGradComp(tup t)
 int main(int argc, char* argv[])
 {
    tup_list points;
-
+   ErrorOutput err_out(path, "snlogic");
    /*
    // Neural Networks paper - simple example
    points.push_back({ 6.5, 4.0, (double)0 });
    points.push_back({ 4.5, -4.0, (double)1 });
    points.push_back({ -4.0, 4.5, (double)1 });
    //------------ setup the network ------------------------------
-   LayerList.push_back(make_shared<Layer>(2, 1, new actSigmoid(1), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(2, 1, new actSigmoid(1), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.1)));
+   //LayerList.push_back(make_shared<Layer>(2, 1, new actSigmoid(1), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1) ));
    */
 
+   
    // Tougher example ---------------------------------------
    // This example puts a cloud of 1's at the center, with a
    // ring of 0's around it, followed by a ring of 1's around that.
+
    MakePointRing(points, 0.0, 0.0, 8.0, 1, 80);
    MakePointRing(points, 0.0, 0.0, 5.0, 0, 160);
    MakePointCloud(points, 0.0, 0.0, 1, 80);
@@ -155,9 +164,10 @@ int main(int argc, char* argv[])
    // a1.
    //------------ setup the network ------------------------------
    int a1 = 9;
-   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
-   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.0001)));
+   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.0001)));
    //--  End Tough example ------------------------------------
+   
 
    //------ Back-propagation test setup.
    // The setup was never run to see if it would converge.  It was
@@ -202,11 +212,14 @@ int main(int argc, char* argv[])
             X = lit->Eval(X);
          }
          double error = loss->Eval(X, Y);
+         for (const auto& lit : LayerList) {
+            error += lit->PenalityError();
+         }
          //if (!(loop % 100)) {
          //   cout << error << ",";
          //}
          double a = 1.0 / (double)count;
-         double b = 1 - a;
+         double b = 1.0 - a;
          avg_error = a * error + b * avg_error;
         // cout << "------ Error: " << error << "------------" << endl;
          RowVector g = loss->LossGradient();
@@ -218,6 +231,7 @@ int main(int argc, char* argv[])
          }
       }
 
+      err_out.Write(avg_error);
       if ( !(loop % 100) ) {
          cout << "avg error " << avg_error << " " << endl;
       }
@@ -232,16 +246,16 @@ int main(int argc, char* argv[])
    for (const auto& lit : LayerList) {
       l++;
       string layer = to_string(l);
-      lit->Save(make_shared<OWeightsCSVFile>(path, "parallel." + layer ));
-      lit->Save(make_shared<IOWeightsBinaryFile>(path,"parallel." + layer ));
+      lit->Save(make_shared<OWeightsCSVFile>(path, "simple." + layer ));
+      lit->Save(make_shared<IOWeightsBinaryFile>(path,"simple." + layer ));
    }
 
    MakeDecsionSurface(path + "\\ds");
 
 
-   //MakeErrorSurface( points );
+   MakeAvgErrorSurface( points );
 
-   cout << "Output complete" << endl;
+   cout << "Output complete. Hit a key and press Enter to close." << endl;
 
    char _c;
    cin >> _c;
@@ -320,4 +334,57 @@ void MakeErrorSurface( tup_list points )
       owf << f.format(OctaveFmt);
       owf.close();
    }
+}
+
+void MakeAvgErrorSurface( tup_list points )
+{
+   const int grid = 99;
+   ColVector w0(grid);
+   ColVector w1(grid);
+   w0.setLinSpaced(-2.0, 2.0);
+   w1.setLinSpaced(-2.0, 2.0);
+
+   Matrix w = LayerList[0]->W;
+
+   for (int i = 0; i < grid; i++) {
+      w0(i) = w0(i) + w(0, 0);
+      w1(i) = w1(i) + w(0, 1);
+   }
+
+   Matrix f(grid, grid);
+   f.setZero();
+
+   int count = 1;
+   for (const tup& t : points) {
+
+
+      for (int r = 0; r < grid; r++) {
+         for (int c = 0; c < grid; c++) {
+            ColVector X(2);
+            ColVector Y(1);
+            X(0) = t.x1;
+            X(1) = t.x2;
+            Y(0) = t.y;
+            LayerList[0]->W(0, 0) = w0(r);
+            LayerList[0]->W(0, 1) = w1(c);
+            for (const auto& lit : LayerList) {
+               X = lit->Eval(X);
+            }
+            double e = loss->Eval(X, Y);
+            for (const auto& lit : LayerList) {
+               e += lit->PenalityError();
+            }
+            double a = 1.0 / (double)count;
+            double b = 1.0 - a;
+            f(r, c) = a*e + b*f(r, c);
+         }
+      }
+      count++;
+   }
+   ofstream owf(path + "\\esa.csv", ios::trunc);
+   assert(owf.is_open());
+   // octave file format
+   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+   owf << f.format(OctaveFmt);
+   owf.close();
 }
