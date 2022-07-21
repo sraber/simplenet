@@ -7,6 +7,8 @@
 #include <bmp.h>
 #include <map>
 
+typedef iConvoLayer::Size clSize;
+
 typedef vector< shared_ptr<Layer> > layer_list;
 typedef vector< shared_ptr<iConvoLayer> > convo_layer_list;
 convo_layer_list ConvoLayerList;
@@ -18,20 +20,20 @@ string model_name = "layer";
 
 void Normalize(Matrix& m)
 {
-   double u = m.sum();
-   u /= (double)m.size();
+   m.normalize();
 
-   m.array() = m.array() - u;
+   //double u = m.array().mean();
+   //m.array() = m.array() - u;
 
-   double std = 0.0;
-   for (int r = 0; r < m.rows(); r++) {
-      for (int c = 0; c < m.cols(); c++) {
-         std += m(r, c) * m(r, c);
-      }
-   }
-   std = sqrt( std / (double)m.size());
+   //double std = 0;
+   //for (int r = 0; r < m.rows(); r++) {
+   //   for (int c = 0; c < m.cols(); c++) {
+   //      std += m(r, c) * m(r, c);
+   //   }
+   //}
+   //std = sqrt( std / (double)m.size()-1);
 
-   m.array() /= std;
+   //m.array() /= std;
 }
 
 void CreateCone(Matrix& m, double ro2, double co2, double radius)
@@ -369,7 +371,7 @@ void InitSmartCorA(bool restore)
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
    {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
          //new actReLU(size_out * size_out),
          new actLinear(size_out * size_out), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
@@ -704,8 +706,8 @@ void Train(int nloop, double eta, int load)
    vector_of_matrix batch = CreateBatch(batch_size, 2);
 #else
    //******** Pattern Pass and Reject Setup **********
-   vector_of_matrix batch = CreateBatch(batch_size/4, 2);
-   vector_of_matrix batch_reject = CreateBatch(3*batch_size/4, 1);
+   vector_of_matrix batch = CreateBatch(batch_size/2, 2);
+   vector_of_matrix batch_reject = CreateBatch(batch_size/2, 1);
    for (Matrix& m : batch_reject) { batch.push_back(m); }
    batch_reject.clear();  
    //*************************************************
@@ -723,7 +725,7 @@ void Train(int nloop, double eta, int load)
 
 #ifndef ALLPASS
          //************ Pattern Reject Switch **************
-         y = (b < batch_size / 4) ? &y_pattern : &y_zero;
+         y = (b < batch_size / 2) ? &y_pattern : &y_zero;
          // 
          //*************************************************
 #endif
@@ -795,7 +797,7 @@ void Train(int nloop, double eta, int load)
 
       bool is_pattern = true;
 #ifndef ALLPASS
-      is_pattern = b < batch_size/4 ? true : false;
+      is_pattern = b < batch_size/2 ? true : false;
 #endif
 
       m[0] = batch[b];
@@ -812,6 +814,10 @@ void Train(int nloop, double eta, int load)
       
       runtime_assert(cv.size() == (pattern_size * pattern_size));
       Eigen::Map<Matrix> mat_distribution(cv.data(), pattern_size, pattern_size);
+
+      // REVIEW:
+      // Eval needs to be modified to return the result (true/false).  This
+      // could be used to form the weighted average vector.
       stat_class.Eval(mat_distribution, is_pattern);
       
    }
@@ -1008,7 +1014,7 @@ int main(int argc, char* argv[])
    try {
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {
-            cout << "Not enough parameters.  Parameters: train | batches | eta | read stored coefs (0|1) [optional] | path [optional]" << endl;
+            cout << "Not enough parameters.  Parameters: train | loops | eta | read stored coefs (0|1) [optional] | path [optional]" << endl;
             return 0;
          }
          double eta = atof(argv[3]);
@@ -1033,7 +1039,7 @@ int main(int argc, char* argv[])
       }
       else {
          cout << "Not a command.\n  "
-            "train:  batches | eta | read stored coefs (0|1) [optional] | path [optional]" << endl
+            "train:  loops | eta | read stored coefs (0|1) [optional] | path [optional]" << endl
             << "info: radius | object (1|2) | path [optional]" << endl << "test: obj (1|2) | path [optional]" << endl;
       }
    }

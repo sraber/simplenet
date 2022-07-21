@@ -62,9 +62,6 @@ void MakePointRing(tup_list& tuples, double xc, double yc, double radius, int la
       cv = lli->Eval(cv);\
    }\
    e = loss->Eval(cv, y);\
-   for (const auto& lit : LayerList) {\
-      e += lit->PenalityError();\
-   }\
 }
 
 void TestGradComp(tup t)
@@ -164,8 +161,8 @@ int main(int argc, char* argv[])
    // a1.
    //------------ setup the network ------------------------------
    int a1 = 9;
-   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.0001)));
-   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.0001)));
+   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
    //--  End Tough example ------------------------------------
    
 
@@ -197,7 +194,7 @@ int main(int argc, char* argv[])
    //    }
    //}
 
-   for (int loop = 1; loop <= 40000; loop++) {
+   for (int loop = 1; loop <= 10000; loop++) {
       double avg_error = 0.0;
       int count = 0;
       for (const tup& t : points) {
@@ -212,9 +209,6 @@ int main(int argc, char* argv[])
             X = lit->Eval(X);
          }
          double error = loss->Eval(X, Y);
-         for (const auto& lit : LayerList) {
-            error += lit->PenalityError();
-         }
          //if (!(loop % 100)) {
          //   cout << error << ",";
          //}
@@ -371,9 +365,6 @@ void MakeAvgErrorSurface( tup_list points )
                X = lit->Eval(X);
             }
             double e = loss->Eval(X, Y);
-            for (const auto& lit : LayerList) {
-               e += lit->PenalityError();
-            }
             double a = 1.0 / (double)count;
             double b = 1.0 - a;
             f(r, c) = a*e + b*f(r, c);

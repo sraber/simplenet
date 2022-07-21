@@ -14,9 +14,9 @@ using namespace std;
 typedef double Number;
 typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic, Eigen::RowMajor> Matrix;
 typedef Eigen::Matrix<int,Eigen::Dynamic,Eigen::Dynamic, Eigen::RowMajor> iMatrix;
-typedef Eigen::Matrix<double,1,Eigen::Dynamic, Eigen::RowMajor> RowVector;
-typedef Eigen::Matrix<double,Eigen::Dynamic, 1, Eigen::RowMajor> ColVector;
-typedef Eigen::Matrix<int,Eigen::Dynamic, 1, Eigen::RowMajor> iColVector;
+typedef Eigen::Matrix<double,1,Eigen::Dynamic> RowVector;
+typedef Eigen::Matrix<double,Eigen::Dynamic, 1> ColVector;
+typedef Eigen::Matrix<int,Eigen::Dynamic, 1> iColVector;
 
 typedef  std::vector<Matrix> vector_of_matrix;
 typedef  std::vector<RowVector> vector_of_rowvector;
@@ -594,7 +594,6 @@ public:
          const ColVector& z) = 0;
    };
 
-   shared_ptr<iPenality> spPenality;
 private:
 
    shared_ptr<iCallBack> EvalPreActivationCallBack;
@@ -615,7 +614,7 @@ private:
    }
 
 public:
-   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit, shared_ptr<iPenality> _pPenality =  make_shared<penalityNone>() ) :
+   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit ) :
       // Add an extra row to align with the bias weight.
       // This row should always be set to 1.
       X(input_size+1), 
@@ -627,7 +626,6 @@ public:
       OutputSize(output_size),
       Z(output_size)
    {
-      spPenality = _pPenality;
       _pActive->Resize(output_size); 
 
       _pInit->ReadFC(W);
@@ -679,19 +677,9 @@ public:
       dW.setZero();  // Not strictly needed.
    }
 
-   void Update(double eta, shared_ptr<iPenality> ipen) {
-      Count = 0;
-      ipen->Update(W, dW, eta);
-      dW.setZero();  // Not strictly needed.
-   }
-
    void Save(shared_ptr<iPutWeights> _pOut) {
       _pOut->Write(W, 1);
       cout << "Weights saved" << endl;
-   }
-
-   double PenalityError() {
-      return spPenality->Error(W);
    }
 
    void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
@@ -714,7 +702,7 @@ public:
    Size KernelSize;
    int KernelPerChannel;
    int Channels;
-   int Padding;
+   //int Padding;
    // Vector of input matrix.  One per channel.
    vector_of_matrix X;
    // Vector of kernel matrix.  There are KernelPerChannel * input channels.
@@ -772,7 +760,7 @@ public:
       InputSize(input_size),
       OutputSize(output_size),
       KernelSize(kernel_size),
-      Padding(input_padding),
+      //Padding(input_padding),
       KernelPerChannel(kernel_number),
       Channels(input_channels),
       NoBias(no_bias)
@@ -780,7 +768,8 @@ public:
       _pActive->Resize(output_size.rows * output_size.cols); 
 
       for (Matrix& m : X) { 
-         m.resize(input_size.rows + input_padding, input_size.cols + input_padding); 
+         //m.resize(input_size.rows + input_padding, input_size.cols + input_padding); 
+         m.resize(input_size.rows, input_size.cols ); 
          m.setZero();
       }
       for (int i = 0; i < W.size();i++) {
@@ -819,27 +808,185 @@ public:
       delete pActive;
    }
 
-   // NOTE: There is a 1-off issue when the out matrix dimension is odd.
-   // REVIEW... this is passing by value!!!
-   void LinearCorrelate( const Matrix& g, const Matrix& h, Matrix& out, double bias = 0.0 )
+   double MultiplyReverseBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
    {
-      for (int r = 0; r < out.rows(); r++) {
+      double sum = 0.0;
+      for (int r = 0; r < size_r; r++) {
+         for (int c = 0; c < size_c; c++) {
+            sum += m(mr-r, mc-c) * h(hr+r, hc+c);
+         }
+      }
+      return sum;
+   }
+
+   void LinearConvolutionAccumulate( Matrix& m, Matrix& h, Matrix& out )
+   {
+      const int mrows = m.rows();
+      const int mcols = m.cols();
+      const int hrows = h.rows();
+      const int hcols = h.cols();
+      const int orows = out.rows();
+      const int ocols = out.cols();
+      int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
+      int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; }
+      int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
+      int hc2 = hcols >> 1; if (!(hcols % 2)) { hc2--; }
+      int hr2p = hrows >> 1; // The complement of hr2
+      int hc2p = hcols >> 1;
+      int or2 = orows >> 1; if (!(orows % 2)) { or2--; }
+      int oc2 = ocols >> 1; if (!(ocols % 2)) { oc2--; }
+
+      for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
          for (int c = 0; c < out.cols(); c++) {
-            double sum = 0.0;
-            for (int rr = 0; rr < h.rows(); rr++) {
-               for (int cc = 0; cc < h.cols(); cc++) {
-                  int gr = r + rr + 1;
-                  int gc = c + cc + 1;
-                  if (gr >= 0 && gr < g.rows() && 
-                        gc >= 0 && gc < g.cols()) {
-                     sum += g(gr, gc) * h(rr, cc);
-                  }
-               }
+            int h1r, h1c;
+            int m2r, m2c;
+            int m1r, m1c;
+            int cr, cc;
+            cr = r + mr2 - or2;
+            cc = c + mc2 - oc2;
+            m2r = cr + hr2;  // Use h2 to the positive side because it is the negitive side
+            m2c = cc + hc2;  // relitive to the way convolution is performed.
+            m1r = cr - hr2p; // Similarly the negitive side physically is the positive
+            m1c = cc - hc2p; // side relitive to the convolution algorithm.
+            h1r = 0;
+            h1c = 0;
+
+            int shr = hrows;
+            if (m2r >= mrows) {
+               int d = m2r - mrows + 1;
+               m2r = mrows - 1;
+               h1r += d;
+               shr -= d;
             }
-            out(r, c) = sum + bias;
+            if (m1r < 0) {
+               shr += m1r;
+               m1r = 0;
+            }
+
+            int shc = hcols;
+            if (m2c >= mcols) {
+               int d = m2c - mcols + 1;
+               m2c = mcols - 1;
+               h1c += d;
+               shc -= d;
+            }
+            if (m1c < 0) {
+               shc += m1c;
+               m1c = 0;
+            }
+
+            if (shr <= 0 || shc <= 0) {
+               //out(r, c) = 0.0;
+               ;
+            }
+            else {
+               //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+               out(r, c) += MultiplyReverseBlock(m, m2r, m2c, h, h1r, h1c, shr, shc);
+            }
          }
       }
    }
+
+   double MultiplyBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
+   {
+      double sum = 0.0;
+      for (int r = 0; r < size_r; r++) {
+         for (int c = 0; c < size_c; c++) {
+            sum += m(mr+r, mc+c) * h(hr+r, hc+c);
+         }
+      }
+      return sum;
+   }
+
+   double MultiplyBlockWithEigen( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
+   {
+      double sum = (m.array().block(mr, mc, size_r, size_c) * h.array().block(hr, hc, size_r, size_c)).sum();
+
+      return sum;
+   }
+
+   void LinearCorrelate( Matrix& m, Matrix& h, Matrix& out, double bias = 0.0 )
+   {
+      const int mrows = m.rows();
+      const int mcols = m.cols();
+      const int hrows = h.rows();
+      const int hcols = h.cols();
+      const int orows = out.rows();
+      const int ocols = out.cols();
+      int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; } 
+      int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; } 
+      int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; } 
+      int hc2 = hcols >> 1; if (!(hcols % 2)) { hc2--; } 
+      int or2 = orows >> 1; if (!(orows % 2)) { or2--; } 
+      int oc2 = ocols >> 1; if (!(ocols % 2)) { oc2--; } 
+
+      for (int r = 0; r < orows; r++) {     // Scan through the Correlation surface.
+         for (int c = 0; c < ocols; c++) {
+            int h1r, h1c;
+            int m1r, m1c;
+            m1r = r + mr2 - or2 - hr2;
+            m1c = c + mc2 - oc2 - hc2;
+
+            int shr = hrows;
+            if (m1r < 0) {
+               shr += m1r;
+               m1r = 0;
+               h1r = hrows - shr;
+            }
+            else {
+               h1r = 0;
+               shr = hrows;
+            }
+            if (m1r + shr > mrows) {
+               shr = mrows - m1r;
+            }
+
+            int shc = hcols;
+            if (m1c < 0) {
+               shc += m1c;
+               m1c = 0;
+               h1c = hcols - shc;
+            }
+            else {
+               h1c = 0;
+               shc = hcols;
+            }
+            if (m1c + shc > mcols) {
+               shc = mcols - m1c;
+            }
+
+            if (shr <= 0 || shc <= 0) {
+               out(r, c) = bias;
+            }
+            else {
+               //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+               out(r, c) = bias + MultiplyBlockWithEigen(m, m1r, m1c, h, h1r, h1c, shr, shc);
+            }
+         }
+      }
+   }
+
+
+   // NOTE: There is a 1-off issue when the out matrix dimension is odd.
+   //void LinearCorrelate( const Matrix& g, const Matrix& h, Matrix& out, double bias = 0.0 )
+   //{
+   //   for (int r = 0; r < out.rows(); r++) {
+   //      for (int c = 0; c < out.cols(); c++) {
+   //         double sum = 0.0;
+   //         for (int rr = 0; rr < h.rows(); rr++) {
+   //            for (int cc = 0; cc < h.cols(); cc++) {
+   //               int gr = r + rr + 1;
+   //               int gc = c + cc + 1;
+   //               if (gr >= 0 && gr < g.rows() && 
+   //                     gc >= 0 && gc < g.cols()) {
+   //                  sum += g(gr, gc) * h(rr, cc);
+   //               }
+   //            }
+   //         }
+   //         out(r, c) = sum + bias;
+   //      }
+   //   }
+   //}
 
    void vecLinearCorrelate()
    {
@@ -890,7 +1037,8 @@ public:
       vector_of_matrix::iterator it = t.begin();
       vector_of_matrix::const_iterator is = s.begin();
       for (; it != t.end(); ++it, ++is) {
-         it->block(Padding,Padding,InputSize.rows,InputSize.cols) = *is;
+        // it->block(Padding,Padding,InputSize.rows,InputSize.cols) = *is;
+         *it = *is;
       }
    }
 
@@ -949,34 +1097,17 @@ public:
       Matrix iter_dW(KernelSize.rows, KernelSize.cols);
       vector_of_matrix debug_iter_dW;
 
-      // The pass through stage (propagating the delta gradient up stream) uses
-      // a 180 degree rotation of the Kernel matrix.  It is stored here
-      // since we don't want to lose the Kernel matrix.
-      Matrix rot_w(KernelSize.rows, KernelSize.cols);
-
       // Allocate the vector of matrix for the return but only allocate
       // the matricies if the caller wants them, else we'll return an empty vector.
       // We have to return something!
       vector_of_matrix vm_backprop_grad(Channels);
-      Matrix pad_delta_grad, temp1;
-      // NOTE: A kernel size with rows not equal columns has not been tested.
-      //
-      // Delta matrix padding is a function of image (input matrix) padding
-      // and kernel size.
-      int dpr = KernelSize.rows - Padding - 1;
-      int dpc = KernelSize.cols - Padding - 1;
-      // Delta matrix size with padding.
-      int ddr = OutputSize.rows + 2 * dpr;
-      int ddc = OutputSize.cols + 2 * dpc;
+
       if (want_backprop_grad) {
          // The caller wants this information so allocate the matricies.
          for (Matrix& mm : vm_backprop_grad) { 
             mm.resize(InputSize.rows, InputSize.cols); 
             mm.setZero(); // The matrix is an accumulator.
          }
-         pad_delta_grad.resize(ddr, ddc);
-         pad_delta_grad.setZero();
-         temp1.resize(InputSize.rows, InputSize.cols);
       }
 
       int chn = 0;
@@ -1002,11 +1133,7 @@ public:
          if (!NoBias) { dB[i] = a * iter_dB + b * dB[i]; }
 
          if (want_backprop_grad) {
-            rot_w = W[i];
-            Rotate180(rot_w);
-            pad_delta_grad.block(dpr, dpc, OutputSize.rows, OutputSize.cols) = m_delta_grad;
-            LinearCorrelate(pad_delta_grad, rot_w, temp1);
-            vm_backprop_grad[chn] += temp1;
+            LinearConvolutionAccumulate(m_delta_grad, W[i], vm_backprop_grad[chn]);
          }
 
          if (  !( (i+1) % KernelPerChannel ) ){  chn++; }

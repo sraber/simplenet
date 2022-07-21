@@ -663,13 +663,13 @@ void InitAdHockModel(bool restore)
    int size_in  = 28;
    int size_out = 14;
    int kern = 28;
-   int pad = 7;
-   int kern_per_chn = 10;
+   int pad = -1; // ignored
+   int kern_per_chn = 4;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
-                           new actReLU(size_out * size_out), 
+                           new actLeakyReLU(size_out * size_out,0.01), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );   l++;
    //---------------------------------------------------------------
@@ -686,23 +686,22 @@ void InitAdHockModel(bool restore)
    l++;  //Need to account for each layer when restoring.
    */
    //---------------------------------------------------------------
-   /*
+   
    // Convolution Layer 3 -----------------------------------------
    // Type: FilterLayer2D
    size_in  = size_out;
    size_out = 7;
-   kern = 5;
-   pad = 2;
+   kern = 14;
+   pad = -1;
    kern_per_chn = 2;
    chn_in = chn_out;
    chn_out = kern_per_chn * chn_in;
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
                            new actLeakyReLU(size_out * size_out,0.01), 
-                           restore ? dynamic_pointer_cast<iInitWeights>( make_shared<IOMultiWeightsBinary>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iInitWeights>( make_shared<InitWeightsToRandomXavier>(sqrt(2.0/kern/kern),0.0,chn_out))) );
-   l++;
+                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );   l++;
    //---------------------------------------------------------------
-
+   /*
    // Pooling Layer 4 ----------------------------------------------
    // Type: poolAvg2D
    size_in  = size_out;
@@ -730,7 +729,7 @@ void InitAdHockModel(bool restore)
    // Fully Connected Layer 6 ---------------------------------------
    // Type: ReLU
    size_in = size_out;
-   size_out = 84;
+   size_out = 28;
    LayerList.push_back(make_shared<Layer>(size_in, size_out, new actReLU(size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );   l++;
@@ -889,9 +888,9 @@ void TestGradComp(string dataroot)
    int ks = ipcl->KernelSize.rows;
    assert( ks == ipcl->KernelSize.cols);
 
-   for (int kn = 0; kn < kpc; kn++) {
-      cout << ipcl->W[kn] << endl << endl;
-   }
+   //for (int kn = 0; kn < kpc; kn++) {
+   //   cout << ipcl->W[kn] << endl << endl;
+   //}
 
    Matrix dif(ks, ks);
 
@@ -901,7 +900,7 @@ void TestGradComp(string dataroot)
       for (int r = 0; r < ks; r++) {
          for (int c = 0; c < ks; c++) {
             double f1, f2;
-            double eta = 1.0e-12;
+            double eta = 1.0e-5;
 
             double w1 = ipcl->W[kn](r, c);
             //----- Eval ------
@@ -950,7 +949,7 @@ void TestGradComp(string dataroot)
    
       // Test the bias value.
       double f1, f2;
-      double eta = 1.0e-12;
+      double eta = 1.0e-5;
 
       double b = ipcl->B[kn];
       //----- Eval ------
@@ -1046,6 +1045,7 @@ void TestSave()
 
 void Train(int nloop, string dataroot, double eta, int load)
 {
+   cout << dataroot << endl;
    MNISTReader reader(dataroot + "\\train\\train-images-idx3-ubyte",
                       dataroot + "\\train\\train-labels-idx1-ubyte");
 
@@ -1092,10 +1092,12 @@ void Train(int nloop, string dataroot, double eta, int load)
    std::uniform_int_distribution<int> uni(0,reader_batch-1); // guaranteed unbiased
 
    double e = 0;
+   int avg_n;
    for (int loop = 0; loop < nloop; loop++) {
       MNISTReader::MNIST_list dl = reader.read_batch(reader_batch);
       for (int bl = 0; bl < batch_loop; bl++) {
          e = 0;
+         avg_n = 1;
          for (int b = 0; b < batch; b++) {
             int n = uni(rng); // Select a random entry out of the batch.
             vector_of_matrix m(1);
@@ -1118,7 +1120,7 @@ void Train(int nloop, string dataroot, double eta, int load)
 
             double le = loss->Eval(cv, dl[n].y);
             //if (le > e) { e = le; }
-            double a = 1.0 / (double)(n + 1);
+            double a = 1.0 / (double)(avg_n);
             double d = 1.0 - a;
             e = a * le + d * e;
 
@@ -1257,9 +1259,9 @@ int main(int argc, char* argv[])
       std::cout << "Starting Convolution MNIST\n";
       string dataroot = "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data";
       //TestSave(); ;
-      //TestGradComp(dataroot);
+      TestGradComp(dataroot);
       //MakeBiasErrorFunction("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\bias_error");
-      //exit(0);
+      exit(0);
 
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {
