@@ -369,9 +369,9 @@ void InitSmartCorA(bool restore)
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
    {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
-         //new actReLU(size_out * size_out),
-         new actLinear(size_out * size_out), 
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
+         //make_unique<actReLU>(),
+         make_unique<actLinear>(), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
          //dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 3)),
@@ -422,9 +422,9 @@ void InitSmartCorB(bool restore)
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
    {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
-         //new actReLU(size_out * size_out),
-         new actLinear(size_out * size_out), 
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
+         //make_unique<actReLU>(),
+         make_unique<actLinear>(), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.1)),
          dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size / 4, 2)),
@@ -449,9 +449,9 @@ void InitSmartCorB(bool restore)
    chn_in = 1;
    chn_out = kern_per_chn * chn_in;
    {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
-         //new actReLU(size_out * size_out),
-         new actLinear(size_out * size_out), 
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
+         //make_unique<actReLU>(),
+         make_unique<actLinear>(), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01)),
          dynamic_pointer_cast<iGetWeights>(make_shared<InitSmartCorConvoLayer>( pattern_size, pattern_center, pattern_size / 4, 2, 2)),
@@ -502,8 +502,8 @@ void InitSmartCor(bool restore)
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
-                           new actReLU(size_out * size_out), 
+   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
+                           make_unique<actReLU>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
                                      dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size/4, 2)),
@@ -538,7 +538,7 @@ void InitSmartCor(bool restore)
    // Type: SoftMAX
    size_in = size_out;
    size_out = size_in;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out, new actSoftMax(size_out), 
+   LayerList.push_back(make_shared<Layer>(size_in, size_out, make_unique<actSoftMax>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );   l++;
    //---------------------------------------------------------------      
