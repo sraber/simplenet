@@ -7,8 +7,6 @@
 #include <bmp.h>
 #include <map>
 
-typedef iConvoLayer::Size clSize;
-
 typedef vector< shared_ptr<Layer> > layer_list;
 typedef vector< shared_ptr<iConvoLayer> > convo_layer_list;
 convo_layer_list ConvoLayerList;
@@ -395,7 +393,7 @@ void InitSmartCorA(bool restore)
    chn_in = chn_out;
    size_out = size_in * size_in * chn_in;
    chn_out = 1;
-   ConvoLayerList.push_back( make_shared<Flatten2D>(iConvoLayer::Size(size_in, size_in), chn_in) );
+   ConvoLayerList.push_back( make_shared<Flatten2D>(clSize(size_in, size_in), chn_in) );
    l++;
    //---------------------------------------------------------------      
    
@@ -424,7 +422,7 @@ void InitSmartCorB(bool restore)
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
    {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
          //new actReLU(size_out * size_out),
          new actLinear(size_out * size_out), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
@@ -451,7 +449,7 @@ void InitSmartCorB(bool restore)
    chn_in = 1;
    chn_out = kern_per_chn * chn_in;
    {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn,
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn,
          //new actReLU(size_out * size_out),
          new actLinear(size_out * size_out), 
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
@@ -475,7 +473,7 @@ void InitSmartCorB(bool restore)
    chn_in = chn_out;
    size_out = size_in * size_in * chn_in;
    chn_out = 1;
-   ConvoLayerList.push_back( make_shared<Flatten2D>(iConvoLayer::Size(size_in, size_in), chn_in) );
+   ConvoLayerList.push_back( make_shared<Flatten2D>(clSize(size_in, size_in), chn_in) );
    l++;
    //---------------------------------------------------------------      
    
@@ -504,7 +502,7 @@ void InitSmartCor(bool restore)
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(iConvoLayer::Size(size_in, size_in), pad, chn_in, iConvoLayer::Size(size_out, size_out), iConvoLayer::Size(kern, kern), kern_per_chn, 
+   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), pad, chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
                            new actReLU(size_out * size_out), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                                      //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
@@ -521,7 +519,7 @@ void InitSmartCor(bool restore)
    chn_in = chn_out;
    size_out = size_in * size_in * chn_in;
    chn_out = 1;
-   ConvoLayerList.push_back( make_shared<Flatten2D>(iConvoLayer::Size(size_in, size_in), chn_in) );
+   ConvoLayerList.push_back( make_shared<Flatten2D>(clSize(size_in, size_in), chn_in) );
    l++;
    //---------------------------------------------------------------      
 

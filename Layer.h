@@ -106,7 +106,7 @@ public:
    struct Size {
       int cols;
       int rows;
-      Size() {}
+      Size() : cols(0), rows(0) {}
       Size(int r, int c) : cols(c), rows(r) {}
    };
    virtual vector_of_matrix Eval(const vector_of_matrix& _x) = 0;
@@ -114,6 +114,8 @@ public:
    virtual void Update(double eta) = 0;
    virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
 };
+
+typedef iConvoLayer::Size clSize;
 //-----------------------------------------------------------
 
 //---------- Weight initializer and output implementations -----
@@ -582,7 +584,7 @@ public:
    ColVector Z;
    Matrix W;
    Matrix dW;
-   iActive* pActive;
+   unique_ptr<iActive> pActive;
 
    class iCallBack
    {
@@ -614,14 +616,14 @@ private:
    }
 
 public:
-   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit ) :
+   Layer(int input_size, int output_size, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit ) :
       // Add an extra row to align with the bias weight.
       // This row should always be set to 1.
       X(input_size+1), 
       // Add an extra column for the bias weight.
       W(output_size, input_size+1),
       dW(input_size+1, output_size ),
-      pActive(_pActive),
+      pActive(move(_pActive)),
       InputSize(input_size),
       OutputSize(output_size),
       Z(output_size)
@@ -634,9 +636,7 @@ public:
       Count = 0;
    }
 
-   ~Layer() {
-      delete pActive;
-   }
+   ~Layer() {}
 
    ColVector Eval(const ColVector& _x) {
       X.topRows(InputSize) = _x;   // Will throw an exception if _x.size != InputSize
@@ -717,7 +717,7 @@ public:
    // The values may be the convolution prior to activation or something else.  The activation
    // objects use the fly-weight pattern and this is the storage for that.
    vector_of_matrix Z;
-   iActive* pActive;
+   unique_ptr<iActive> pActive;
    bool NoBias;
 
    class iCallBack
@@ -749,18 +749,17 @@ private:
    }
 public:
 
-   FilterLayer2D(Size input_size, int input_padding, int input_channels, Size output_size, Size kernel_size, int kernel_number, iActive* _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
+   FilterLayer2D(Size input_size, int input_channels, Size output_size, Size kernel_size, int kernel_number, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
       X(input_channels), 
       W(input_channels*kernel_number),
       B(input_channels*kernel_number),
       Z(input_channels*kernel_number),
       dW(input_channels*kernel_number),
       dB(input_channels*kernel_number),
-      pActive(_pActive),
+      pActive(move(_pActive)),
       InputSize(input_size),
       OutputSize(output_size),
       KernelSize(kernel_size),
-      //Padding(input_padding),
       KernelPerChannel(kernel_number),
       Channels(input_channels),
       NoBias(no_bias)
@@ -804,9 +803,7 @@ public:
 
       Count = 0;
    }
-   ~FilterLayer2D() {
-      delete pActive;
-   }
+   ~FilterLayer2D() {}
 
    double MultiplyReverseBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
    {

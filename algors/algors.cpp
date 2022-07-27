@@ -9,11 +9,16 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include <amoeba.h>
+#include <random>
 
 #include <time.h>
 
 #include "fft1.h"
 #include "fftn.h"
+
+#include <opencv2\\core.hpp>
+#include <opencv2\\highgui.hpp>
+#include <opencv2\\imgproc.hpp>
 
 string path = "C:\\projects\\neuralnet\\simplenet\\algors\\results";
 
@@ -803,6 +808,142 @@ void MakeCenterCircle(Matrix& m, double rad)
    }
 }
 
+void MakeCenterGaussian(Matrix& m, double t)
+{
+   int rows = m.rows();
+   int cols = m.cols();
+   int n = cols > rows ? cols : rows;
+   int n2 = n >> 1; if (!(n % 2)) { n2--; }
+   m.setConstant(0.0);
+   double c = 1.0 / (2.0 * M_PI * t);
+   double c1 = 0.25 / t;
+   for (int i = 0; i < rows; i++) {
+      for (int j = 0; j < cols; j++) {
+         double x = (double)(n2 - j);
+         double y = (double)(n2 - i);
+         //double r = sqrt(x * x + y * y);
+         m(i, j) = exp( -c1 * (x * x + y * y) );
+      }
+   }
+}
+
+void TestMomentum()
+{
+   std::default_random_engine generator;
+   std::normal_distribution<double> distribution(0.0, 1.0);
+
+   ofstream owf(path +  "\\" + "momentum" + ".csv", ios::trunc);
+
+   double v = 0.0;
+   double avg_v = 0.0;
+   double avg_x = 0.0;
+   for (int c = 1; c <= 100; c++) {
+      double a = 1.0 / (double)c;
+      double b = 1.0 - a;
+      double x = distribution(generator);
+
+      double mA = 0.8;  // Momentum parameter.  valid range 0 to 1.
+
+      // Momentum is just a simple 1st-order IIR low pass filter.
+      // v = (1.0 - mA) * v + mA * x;
+      // Can be written as:
+      v = v + mA * (x - v);
+      owf << x << " , " << v << endl;
+      avg_v = b * avg_v + a * v;
+      avg_x = b * avg_x + a * x;
+   }
+
+   cout << "avg_v: " << avg_v << " avg_x: " << avg_x << endl;
+
+   char c;
+   cin >> c;
+}
+
+void SobelXY(Matrix& m)
+{
+   Matrix hx(3,3);
+   Matrix hy(3,3);
+
+   hx << 1, 0, -1,
+         2, 0, -2,
+         1, 0, -1;
+
+   hy << 1, 2, 1,
+         0, 0, 0,
+        -1,-2,-1;
+
+   Matrix sx(m.rows(),m.cols());
+   Matrix sy(m.rows(),m.cols());
+
+   LinearConvolution3(m, hx, sx);
+   LinearConvolution3(m, hy, sy);
+
+   sx.array() *= sx.array();
+   sy.array() *= sy.array();
+   m = sx + sy;
+   m.array().cwiseSqrt();
+}
+
+string type2str(int type) {
+  string r;
+
+  uchar depth = type & CV_MAT_DEPTH_MASK;
+  uchar chans = 1 + (type >> CV_CN_SHIFT);
+
+  switch ( depth ) {
+    case CV_8U:  r = "8U"; break;
+    case CV_8S:  r = "8S"; break;
+    case CV_16U: r = "16U"; break;
+    case CV_16S: r = "16S"; break;
+    case CV_32S: r = "32S"; break;
+    case CV_32F: r = "32F"; break;
+    case CV_64F: r = "64F"; break;
+    default:     r = "User"; break;
+  }
+
+  r += "C";
+  r += (chans+'0');
+
+  return r;
+}
+
+void TestObjectDetection()
+{
+   cv::Mat image;
+   image = cv::imread( path + "\\" + "objects.bmp", cv::IMREAD_GRAYSCALE);
+
+   //cout << type2str(image.type());
+   //cv::cvtColor(image, image, cv::COLOR_BGR2GRAY);
+   //imshow("objs", image);
+   int rows = image.rows;
+   int cols = image.cols;
+   //Eigen::Map<Matrix> cvm(image.ptr<double>(), rows, cols);
+   Matrix m(rows, cols);
+   for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+         m(r,c) = (double)image.at<unsigned char>(r, c);
+         //cout << (int)image.at<unsigned char>(r, c) << ",";
+      }
+      //cout << endl;
+   }
+
+   //SobelXY(m);
+
+   Matrix g(64, 64);
+   MakeCenterGaussian(g, 24.0);
+
+   Matrix out(rows, cols);
+   LinearConvolution3(m, g, out);
+
+   //ofstream owf(path +  "\\" + "gauss" + ".csv", ios::trunc);
+   //owf << g;
+
+   ofstream owf(path +  "\\" + "objs" + ".csv", ios::trunc);
+   owf << out;
+
+   //char c = cv::waitKey(0);
+}
+
 typedef void (*filter)(Matrix&, Matrix&, Matrix&);
 
 
@@ -869,11 +1010,9 @@ void TestFilter( int sm, int sh, int so, string name, filter fn )
 
       ScaleToOne(o.data(), o.rows() * o.cols());
 
-      string fileroot = "C:\\projects\\neuralnet\\simplenet\\algors\\results\\";
+      MakeMatrixImage(path + "\\" + name + ".bmp", o);
 
-      MakeMatrixImage(fileroot + name + ".bmp", o);
-
-      ofstream owf(fileroot + name + ".csv", ios::trunc);
+      ofstream owf(path +  "\\" + name + ".csv", ios::trunc);
 
       // octave file format
       const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
@@ -999,7 +1138,8 @@ void rlft2(Doub *data, ColVector& speq,
 int main()
 {
     std::cout << "Algorithm Tester!\n";
-    TestKernelFlipper1();
+    //TestKernelFlipper1();
+    TestObjectDetection();
 
     //REVIEW:
     // The test image was tainting the comparisons.  Fix the test image

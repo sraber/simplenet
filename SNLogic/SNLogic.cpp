@@ -161,8 +161,8 @@ int main(int argc, char* argv[])
    // a1.
    //------------ setup the network ------------------------------
    int a1 = 9;
-   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
-   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(2, a1, make_unique<actSigmoid>(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   LayerList.push_back(make_shared<Layer>(a1, 1, make_unique<actSigmoid>(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
    //--  End Tough example ------------------------------------
    
 
