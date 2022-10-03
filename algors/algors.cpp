@@ -946,12 +946,11 @@ void TestObjectDetection()
 
 typedef void (*filter)(Matrix&, Matrix&, Matrix&);
 
-
-void TestFilter( int sm, int sh, int so, string name, filter fn )
+void TestEdgeDetect()
 {
       MNISTReader::MNIST_list dl;
       int itodl[10];
-      /*
+      
       MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-images-idx3-ubyte",
          "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-labels-idx1-ubyte");
 
@@ -967,12 +966,9 @@ void TestFilter( int sm, int sh, int so, string name, filter fn )
       itodl[8] = 17;
       itodl[9] = 4;
 
-      Matrix h1(28, 28);
-      TrasformMNISTtoMatrix(h1, dl[ itodl[4] ].x );
-      ScaleToOne(h1.data(), h1.rows() * h1.cols());
-
-      Matrix h(14, 14);
-      h = h1.block(7, 7, 14, 14);
+      Matrix g(28, 28);
+      TrasformMNISTtoMatrix(g, dl[ itodl[4] ].x );
+      ScaleToOne(g.data(), g.rows() * g.cols());
 
       Matrix sx(3, 3);
       sx.setZero();
@@ -986,21 +982,32 @@ void TestFilter( int sm, int sh, int so, string name, filter fn )
       sy(0, 1) = 2;  sy(2, 1) = -2;
       sy(0, 2) = 1;  sy(2, 2) = -1;
 
-      Matrix s(3, 3);
-      //LinearConvolution(sx, sy, s);
-      s.setConstant(-1);
-      s(1, 1) = 4; 
+      Matrix lap(3, 3);
+      lap.setZero();
+                      lap(1, 0) =  1;  
+      lap(0, 1) = 1;  lap(1, 1) = -4;  lap(2, 1) =  1;
+                      lap(1, 2) =  1;
 
-      Matrix m(28, 28);
-      TrasformMNISTtoMatrix(m, dl[ itodl[4] ].x );
-      ScaleToOne(m.data(), m.rows() * m.cols());
+      Matrix o(28, 28);
 
+      LinearConvolution3(g, lap, o);
 
-      Matrix g(56,56);
-      g.setZero();
-      g.block(14, 14,28,28) = m;
-      */
+      ScaleToOne(o.data(), o.rows() * o.cols());
 
+      string name = "lap_edge";
+
+      MakeMatrixImage(path + "\\" + name + ".bmp", o);
+
+      ofstream owf(path +  "\\" + name + ".csv", ios::trunc);
+
+      // octave file format
+      const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+      owf << o.format(OctaveFmt);
+      owf.close();
+}
+
+void TestFilterFunction( int sm, int sh, int so, string name, filter fn )
+{
       Matrix m(sm, sm);  MakeCenterCircle(m, 5);
       Matrix h(sh, sh);  MakeCenterCircle(h, 5);
       Matrix o(so, so);  o.setZero();
@@ -1139,7 +1146,8 @@ int main()
 {
     std::cout << "Algorithm Tester!\n";
     //TestKernelFlipper1();
-    TestObjectDetection();
+    //TestObjectDetection();
+    TestEdgeDetect();
 
     //REVIEW:
     // The test image was tainting the comparisons.  Fix the test image
@@ -1147,8 +1155,8 @@ int main()
     // result for a symetric test pattern.
     // Now need to reconcile this with the Kernel Flipping algor
 
-    //TestFilter(32,16,16,"con_old", LinearCorrelate3);
-    //TestFilter(32,16,16,"con_new", LinearConvolution3);
+    //TestFilterFunction(32,16,16,"con_old", LinearCorrelate3);
+    //TestFilterFunction(32,16,16,"con_new", LinearConvolution3);
 
     // Combining Signals in the Time or Frequency domain results in the same outcome/
     /*
@@ -1236,6 +1244,7 @@ int main()
    owf << t;
    owf.close();
 
+   //!!!!!!!!!!!!!!!!!!  2D FFT Test  !!!!!!!!!!!!!!!!!!!
    //unsigned long dims[] = { 64, 64 };
    ColVector speq(2*64);
    rlft2(t.data(), speq, 64, 64, 1);

@@ -17,6 +17,15 @@ shared_ptr<iLossLayer> loss;
 string path = "C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\weights";
 string model_name = "layer";
 
+/*
+// REVIEW:  Just thinking about a model class.
+struct SNModel {
+   layer_list LayerList;
+   convo_layer_list ConvoLayerList;
+   SNModel() {}
+
+};
+*/
 class StatsOutput
 {
    ofstream owf;
@@ -77,8 +86,6 @@ public:
       owf << endl;
    }
 };
-
-
 
 void MakeMatrixImage(string file, Matrix m)
 {
@@ -663,7 +670,6 @@ void InitAdHockModel(bool restore)
    int size_in  = 28;
    int size_out = 14;
    int kern = 28;
-   int pad = -1; // ignored
    int kern_per_chn = 4;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
@@ -692,7 +698,6 @@ void InitAdHockModel(bool restore)
    size_in  = size_out;
    size_out = 7;
    kern = 14;
-   pad = -1;
    kern_per_chn = 2;
    chn_in = chn_out;
    chn_out = kern_per_chn * chn_in;
@@ -1051,6 +1056,16 @@ void Train(int nloop, string dataroot, double eta, int load)
 
    InitModel(load > 0 ? true : false);
 
+   for ( auto cli : ConvoLayerList ) {
+      auto ist = dynamic_pointer_cast<iStash>(cli);
+      if (ist) { ist->StashWeights(); }
+   }
+
+   for (auto lli : LayerList) {
+      auto ist = dynamic_pointer_cast<iStash>(lli);
+      if (ist) { ist->StashWeights(); }
+   }
+
 //#define STATS
 #ifdef STATS
    vector<GradOutput> lveo(LayerList.size());
@@ -1119,6 +1134,25 @@ void Train(int nloop, string dataroot, double eta, int load)
             }
 
             double le = loss->Eval(cv, dl[n].y);
+            if (isnan(le)) {
+               for ( auto cli : ConvoLayerList ) {
+                  auto ist = dynamic_pointer_cast<iStash>(cli);
+                  if (ist) { ist->ApplyStash(); }
+               }
+
+               for (auto lli : LayerList) {
+                  auto ist = dynamic_pointer_cast<iStash>(lli);
+                  if (ist) { ist->ApplyStash(); }
+               }
+
+               eta /= 10.0;
+               runtime_assert(eta > numeric_limits<double>::epsilon()) // macro
+               cout << "eta reset: " << eta << endl;
+               continue;
+            }
+            // NOTE: The reset will just pick up in the middile  of the batch.
+            err_out.Write(le);
+
             //if (le > e) { e = le; }
             double a = 1.0 / (double)(avg_n);
             double d = 1.0 - a;
@@ -1151,6 +1185,7 @@ void Train(int nloop, string dataroot, double eta, int load)
                }
             }
 
+            // This is stoastic descent here.  It is inside the batch loop.
             //eta = (1.0 / (1.0 + 0.001 * loop)) * eta;
             for (auto lli : ConvoLayerList) {
                lli->Update(eta);
@@ -1158,9 +1193,20 @@ void Train(int nloop, string dataroot, double eta, int load)
             for (auto lit : LayerList) {
                lit->Update(eta);
             }
-
          }
-         err_out.Write(e);
+
+         for ( auto cli : ConvoLayerList ) {
+            auto ist = dynamic_pointer_cast<iStash>(cli);
+            if (ist) { ist->StashWeights(); }
+         }
+
+         for (auto lli : LayerList) {
+            auto ist = dynamic_pointer_cast<iStash>(lli);
+            if (ist) { ist->StashWeights(); }
+         }
+
+         // REVIEW: moved to every error above
+         //err_out.Write(e);
          cout << "count: " << loop << " error:" << e << endl;
       }
    }
@@ -1253,19 +1299,28 @@ void Test(string dataroot)
    std::cout << " correct/incorrect " << stat_class.Correct << " , " << stat_class.Incorrect << endl;
 }
 
+//NOTE:
+//      Momentum currently implemented.  When momentum is implemented it means that the current
+//      dW has to be stashed as well (to be accurate) or dW at least has to be zeroed when
+//      the Stash is applied because the Count parameter is not used.  Momentum uses a low pass filter
+//      instead of averaging, which itself is a waste of cycles when Stoccastic Descent is used.
+//      !!!!!!! Again... Momentum currently hardcoded in.  !!!!!!!!!
+//      Would be interesting to do a comparison of error curve with and without momentum.
+
+
 int main(int argc, char* argv[])
 {
    try {
       std::cout << "Starting Convolution MNIST\n";
       string dataroot = "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data";
       //TestSave(); ;
-      TestGradComp(dataroot);
+      //TestGradComp(dataroot);
       //MakeBiasErrorFunction("C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\bias_error");
-      exit(0);
+      //exit(0);
 
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {
-            cout << "Not enough parameters.  Parameters: train | batches | eta | read stored coefs (0|1) [optional] | dataroot [optional] | path [optional]" << endl;
+            cout << "Not enough parameters.  Parameters: train | epochs | eta | read stored coefs (0|1) [optional] | dataroot [optional] | path [optional]" << endl;
             return 0;
          }
          double eta = atof(argv[3]);

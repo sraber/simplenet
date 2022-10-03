@@ -94,6 +94,7 @@ public:
    virtual RowVector LossGradient(void) = 0;
 };
 // ---------------------------------------------------------
+
 //----------- The Convolutional Network layer interface ----
 // The convolutional network requires an interface to abstract
 // the various network components.  Unlike a fully connected 
@@ -109,13 +110,27 @@ public:
       Size() : cols(0), rows(0) {}
       Size(int r, int c) : cols(c), rows(r) {}
    };
+   virtual ~iConvoLayer () = 0 {};
    virtual vector_of_matrix Eval(const vector_of_matrix& _x) = 0;
    virtual vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true) = 0;
    virtual void Update(double eta) = 0;
    virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
+
 };
 
 typedef iConvoLayer::Size clSize;
+//-----------------------------------------------------------
+
+//---------- The Stash interface ----------------------------
+// Object that have learnable parameters and want to offer ability
+// to stash and apply stash to those parameters can implement this
+// interface.
+class iStash {
+public:
+   virtual ~iStash () = 0 {};
+   virtual void StashWeights() = 0;
+   virtual void ApplyStash() = 0;
+};
 //-----------------------------------------------------------
 
 //---------- Weight initializer and output implementations -----
@@ -377,6 +392,7 @@ public:
    actLeakyReLU(int size, double alp) : Size(size),Temp(size),Alpha(alp) {}
    actLeakyReLU(double alp) : Size(0), Alpha(alp) {}
    void Resize(int size) {
+      Size = size;
       Temp.resize(size);
    }
    // Z = W x + b.  Z is what is passed into the activation function.
@@ -575,7 +591,7 @@ public:
 };
 
 // Fully Connected Layer ----------------------------------------
-class Layer {
+class Layer : public iStash {
 public:
    int Count;
    int InputSize;
@@ -583,6 +599,7 @@ public:
    ColVector X;
    ColVector Z;
    Matrix W;
+   Matrix stash_W;
    Matrix dW;
    unique_ptr<iActive> pActive;
 
@@ -628,7 +645,7 @@ public:
       OutputSize(output_size),
       Z(output_size)
    {
-      _pActive->Resize(output_size); 
+      pActive->Resize(output_size); 
 
       _pInit->ReadFC(W);
 
@@ -637,6 +654,17 @@ public:
    }
 
    ~Layer() {}
+
+   void StashWeights() {
+      stash_W.resize(W.rows(), W.cols());
+      stash_W = W;
+   }
+
+   void ApplyStash() {
+      W = stash_W;
+      dW.setZero(); // Setting Count to zero effectivly zeros dW.  But needed if using momentum.
+      Count = 0;
+   }
 
    ColVector Eval(const ColVector& _x) {
       X.topRows(InputSize) = _x;   // Will throw an exception if _x.size != InputSize
@@ -659,9 +687,25 @@ public:
       RowVector delta_grad = child_grad * pActive->Jacobian(Z);
       Matrix iter_w_grad = X * delta_grad;
       BACKPROPCALLBACK(BackpropCallBack, iter_w_grad);
+
+#ifdef MOMENTUM
+      // REVIEW: Momentum 
+      // iter_W_grad --> x (input)
+      // dW --> y(n-1)
+      double a = 0.9;  // Valid range 0 - 1
+      double b = 1.0 - a;
+      // NOTE: The b and a are swapped from the equation above.
+      //       This can be confusing.
+      //       This is implementation of simple IIR low pass filter.
+      //dW = b * iter_w_grad + a * dW;
+      // Faster implementation (I think).
+      dW += b * (iter_w_grad - dW);
+#else
       double a = 1.0 / (double)Count;
       double b = 1.0 - a;
       dW = a * iter_w_grad + b * dW;
+#endif
+
       if (want_layer_grad) {
          return (delta_grad * W.block(0,0,OutputSize, InputSize));
       }
@@ -674,7 +718,7 @@ public:
    void Update(double eta) {
       Count = 0;
       W = W - eta * dW.transpose();
-      dW.setZero();  // Not strictly needed.
+      //dW.setZero();  // Not strictly needed.
    }
 
    void Save(shared_ptr<iPutWeights> _pOut) {
@@ -694,7 +738,9 @@ if( BackpropCallBack!=nullptr ){ \
    debug_iter_dW.push_back( Matrix(iter_dW) );\
 }
 
-class FilterLayer2D : public iConvoLayer {
+class FilterLayer2D : 
+   public iConvoLayer, 
+   public iStash {
 public:
    int Count;
    Size InputSize;
@@ -702,15 +748,18 @@ public:
    Size KernelSize;
    int KernelPerChannel;
    int Channels;
-   //int Padding;
    // Vector of input matrix.  One per channel.
    vector_of_matrix X;
    // Vector of kernel matrix.  There are KernelPerChannel * input channels.
    vector_of_matrix W;
+   // Vector of kernel matrix stash.
+   vector_of_matrix stash_W;
    // Vector of kernel matrix gradients.  There are KernelPerChannel * input channels.
    vector_of_matrix dW;
    // The bias vector.  One bias for each kernel.
    vector_of_number B;
+   // The bias vector stash.
+   vector_of_number stash_B;
    // The bias gradient vector.
    vector_of_number dB;
    // Vector of activation complementary matrix.  There are KernelPerChannel * input channels.
@@ -730,6 +779,7 @@ public:
          const vector_of_number& b, const vector_of_number& db,
          const vector_of_matrix& z) = 0;
    };
+
 private:
    shared_ptr<iCallBack> EvalPreActivationCallBack;
    shared_ptr<iCallBack> EvalPostActivationCallBack;
@@ -752,7 +802,9 @@ public:
    FilterLayer2D(Size input_size, int input_channels, Size output_size, Size kernel_size, int kernel_number, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
       X(input_channels), 
       W(input_channels*kernel_number),
+      stash_W(input_channels*kernel_number),
       B(input_channels*kernel_number),
+      stash_B(input_channels*kernel_number),
       Z(input_channels*kernel_number),
       dW(input_channels*kernel_number),
       dB(input_channels*kernel_number),
@@ -764,10 +816,9 @@ public:
       Channels(input_channels),
       NoBias(no_bias)
    {
-      _pActive->Resize(output_size.rows * output_size.cols); 
+      pActive->Resize(output_size.rows * output_size.cols); 
 
       for (Matrix& m : X) { 
-         //m.resize(input_size.rows + input_padding, input_size.cols + input_padding); 
          m.resize(input_size.rows, input_size.cols ); 
          m.setZero();
       }
@@ -803,7 +854,36 @@ public:
 
       Count = 0;
    }
+
    ~FilterLayer2D() {}
+
+   void StashWeights() {
+      vector_of_matrix::iterator istsh = stash_W.begin();
+      vector_of_matrix::iterator iw = W.begin();
+      for (; iw != W.end();++iw, ++istsh) {
+         istsh->resize(KernelSize.rows, KernelSize.cols); 
+         *istsh = *iw;
+      }
+
+      stash_B = B;
+   }
+
+   void ApplyStash() {
+      vector_of_matrix::iterator istsh = stash_W.begin();
+      vector_of_matrix::iterator iw = W.begin();
+      for (; iw != W.end();++iw, ++istsh) {
+         *iw = *istsh;
+      }
+
+      B = stash_B;
+      //Setting Count to zero effectivly zeros dW.
+      Count = 0;
+
+      // Necessary when using momentum.
+      for (Matrix& m : dW) {
+         m.setZero();
+      }
+   }
 
    double MultiplyReverseBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
    {
@@ -818,12 +898,12 @@ public:
 
    void LinearConvolutionAccumulate( Matrix& m, Matrix& h, Matrix& out )
    {
-      const int mrows = m.rows();
-      const int mcols = m.cols();
-      const int hrows = h.rows();
-      const int hcols = h.cols();
-      const int orows = out.rows();
-      const int ocols = out.cols();
+      const int mrows = (int)m.rows();
+      const int mcols = (int)m.cols();
+      const int hrows = (int)h.rows();
+      const int hcols = (int)h.cols();
+      const int orows = (int)out.rows();
+      const int ocols = (int)out.cols();
       int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
       int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; }
       int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
@@ -904,12 +984,12 @@ public:
 
    void LinearCorrelate( Matrix& m, Matrix& h, Matrix& out, double bias = 0.0 )
    {
-      const int mrows = m.rows();
-      const int mcols = m.cols();
-      const int hrows = h.rows();
-      const int hcols = h.cols();
-      const int orows = out.rows();
-      const int ocols = out.cols();
+      const int mrows = (int)m.rows();
+      const int mcols = (int)m.cols();
+      const int hrows = (int)h.rows();
+      const int hcols = (int)h.cols();
+      const int orows = (int)out.rows();
+      const int ocols = (int)out.cols();
       int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; } 
       int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; } 
       int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; } 
@@ -963,28 +1043,6 @@ public:
       }
    }
 
-
-   // NOTE: There is a 1-off issue when the out matrix dimension is odd.
-   //void LinearCorrelate( const Matrix& g, const Matrix& h, Matrix& out, double bias = 0.0 )
-   //{
-   //   for (int r = 0; r < out.rows(); r++) {
-   //      for (int c = 0; c < out.cols(); c++) {
-   //         double sum = 0.0;
-   //         for (int rr = 0; rr < h.rows(); rr++) {
-   //            for (int cc = 0; cc < h.cols(); cc++) {
-   //               int gr = r + rr + 1;
-   //               int gc = c + cc + 1;
-   //               if (gr >= 0 && gr < g.rows() && 
-   //                     gc >= 0 && gc < g.cols()) {
-   //                  sum += g(gr, gc) * h(rr, cc);
-   //               }
-   //            }
-   //         }
-   //         out(r, c) = sum + bias;
-   //      }
-   //   }
-   //}
-
    void vecLinearCorrelate()
    {
       int chn = 0;
@@ -1029,19 +1087,16 @@ public:
       }
       //------------------------------------------
    }
-   void vecSetXValue(vector_of_matrix& t, const vector_of_matrix& s)
-   {
-      vector_of_matrix::iterator it = t.begin();
-      vector_of_matrix::const_iterator is = s.begin();
-      for (; it != t.end(); ++it, ++is) {
-        // it->block(Padding,Padding,InputSize.rows,InputSize.cols) = *is;
-         *it = *is;
-      }
-   }
 
    vector_of_matrix Eval(const vector_of_matrix& _x) 
    {
-      vecSetXValue(X, _x);
+      vector_of_matrix::const_iterator is = _x.begin();
+      vector_of_matrix::iterator it = X.begin();
+      for ( ; it != X.end(); ++it, ++is) {
+         // Copy from matrix of source (_x) to matrix of target (X).
+         *it = *is;
+      }
+
       vecLinearCorrelate();
       vector_of_matrix vecOut(Z.size());
 
@@ -1123,11 +1178,26 @@ public:
 
          BACKPROP_CALLBACK_PREP
 
+#ifdef MOMENTUM
+         // REVIEW: Momentum 
+         // iter_W_grad --> x (input)
+         // dW --> y(n-1)
+         double a = 0.9;  // Valid range 0 - 1
+         double b = 1.0 - a;
+         // NOTE: The b and a are swapped from the equation above.
+         //       This can be confusing.
+         //       This is implementation of simple IIR low pass filter.
+         //dW = b * iter_w_grad + a * dW;
+         // Faster implementation (I think).
+         dW[i] += b * (iter_dW - dW[i]);
+         if (!NoBias) { dB[i] += b * (iter_dB - dB[i]); }
+#else
          // Average the result (iter_dW) into the Kernel gradient (dW).
          double a = 1.0 / (double)Count;
          double b = 1.0 - a;
          dW[i] = a * iter_dW + b * dW[i];
          if (!NoBias) { dB[i] = a * iter_dB + b * dB[i]; }
+#endif
 
          if (want_backprop_grad) {
             LinearConvolutionAccumulate(m_delta_grad, W[i], vm_backprop_grad[chn]);
@@ -1145,7 +1215,7 @@ public:
       int maps = Channels * KernelPerChannel;
       for (int i = 0; i < maps;i++) {
          W[i] = W[i] - eta * dW[i];
-         dW[i].setZero();
+         //dW[i].setZero();
 
          if (!NoBias) {
             B[i] = B[i] - eta * dB[i];
