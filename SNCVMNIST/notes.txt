@@ -1,0 +1,5 @@
+The network addition doesn't naturally propagate change to the new kernel.  The old part of the network seems to increase in magnitude.  Most importantly, no super convergence with addition of new kernel.
+
+A network with a 5th kernel that is trained from the begining does seem to have more capibility to learn and seems to have topped out at %98.3 with a bit of overfitting.  The test showed ~%97.59 accurate. 
+
+another 20 epocs train: %98.6  Test: %97.45 (no change)

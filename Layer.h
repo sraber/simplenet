@@ -83,7 +83,7 @@ public:
 class iPutWeights {
 public:
    virtual ~iPutWeights () = 0 {};
-   virtual void Write(Matrix& w, int k) = 0;
+   virtual void Write(const Matrix& w, int k) = 0;
 };
 //---------------------------------------------------------
 // ------- The Loss Layer interface ------------------------
@@ -109,6 +109,7 @@ public:
       int rows;
       Size() : cols(0), rows(0) {}
       Size(int r, int c) : cols(c), rows(r) {}
+      inline void Resize(int r, int c) { rows = r; cols = c; }
    };
    virtual ~iConvoLayer () = 0 {};
    virtual vector_of_matrix Eval(const vector_of_matrix& _x) = 0;
@@ -250,7 +251,7 @@ class IOWeightsBinaryFile : public iGetWeights, public iPutWeights{
    string Path;
    string RootName;
 
-   void Put(Matrix& m, string filename) {
+   void Put(const Matrix& m, string filename) {
       ofstream file(filename,  ios::trunc | ios::binary | ios::out );
       runtime_assert(file.is_open());
       MatHeader header;
@@ -295,7 +296,7 @@ class IOWeightsBinaryFile : public iGetWeights, public iPutWeights{
 
 public:
    IOWeightsBinaryFile(string path, string root_name) : RootName(root_name), Path(path) {}
-   void Write(Matrix& m, int k) {
+   void Write(const Matrix& m, int k) {
       string str_count;
       str_count = to_string(k);
       string pathname = Path + "\\" + RootName + "." + str_count + ".wts";
@@ -319,7 +320,7 @@ class OWeightsCSVFile : public iPutWeights{
    string Path;
    string RootName;
 
-   void Put(Matrix& m, string filename) {
+   void Put(const Matrix& m, string filename) {
       ofstream file(filename,  ios::trunc | ios::out );
       runtime_assert(file.is_open());
       int rows = (int)m.rows();
@@ -336,7 +337,7 @@ class OWeightsCSVFile : public iPutWeights{
 
 public:
    OWeightsCSVFile(string path, string root_name) : RootName(root_name), Path(path) {}
-   void Write(Matrix& m, int k) {
+   void Write(const Matrix& m, int k) {
       string str_count;
       str_count = to_string(k);
       string pathname = Path + "\\" + RootName + "." + str_count + ".csv";
@@ -692,7 +693,7 @@ public:
       // REVIEW: Momentum 
       // iter_W_grad --> x (input)
       // dW --> y(n-1)
-      double a = 0.9;  // Valid range 0 - 1
+      double a = MOMENTUM;  // Valid range 0 - 1
       double b = 1.0 - a;
       // NOTE: The b and a are swapped from the equation above.
       //       This can be confusing.
@@ -861,8 +862,21 @@ public:
       vector_of_matrix::iterator istsh = stash_W.begin();
       vector_of_matrix::iterator iw = W.begin();
       for (; iw != W.end();++iw, ++istsh) {
-         istsh->resize(KernelSize.rows, KernelSize.cols); 
+         istsh->resize(KernelSize.rows, KernelSize.cols);
          *istsh = *iw;
+         // Example Lambda call using only captures.  All pass by value.
+         //[this,iw,istsh]() {
+         //   istsh->resize(KernelSize.rows, KernelSize.cols);
+         //   *istsh = *iw;
+         //}(); //<-- the last () is to call it immeadiatly.  Remove to pass to another function.
+         // 
+         // It would be very simple to make an interface that accepts functors as 
+         // arguments with specification that they not require parameters.
+         // The interface would be to a thread pool object.  The functors would be
+         // placed in a list if no thread is free and when the list is
+         // empty the class would unblock.
+         // The interface supports a blocking method to provide a way
+         // to wait for the work to complete.
       }
 
       stash_B = B;
@@ -880,9 +894,11 @@ public:
       Count = 0;
 
       // Necessary when using momentum.
+ #ifdef MOMENTUM
       for (Matrix& m : dW) {
          m.setZero();
       }
+#endif
    }
 
    double MultiplyReverseBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
@@ -1043,7 +1059,7 @@ public:
       }
    }
 
-   void vecLinearCorrelate()
+   inline void vecLinearCorrelate()
    {
       int chn = 0;
       int count = 0;
@@ -1182,7 +1198,7 @@ public:
          // REVIEW: Momentum 
          // iter_W_grad --> x (input)
          // dW --> y(n-1)
-         double a = 0.9;  // Valid range 0 - 1
+         double a = MOMENTUM;  // Valid range 0 - 1
          double b = 1.0 - a;
          // NOTE: The b and a are swapped from the equation above.
          //       This can be confusing.
@@ -1214,8 +1230,10 @@ public:
       Count = 0;
       int maps = Channels * KernelPerChannel;
       for (int i = 0; i < maps;i++) {
-         W[i] = W[i] - eta * dW[i];
-         //dW[i].setZero();
+         // REVIEW:  WARNING Will Robenson.. The "if" is for a special experiment!!!!!
+         //if (i > 3) {
+            W[i] = W[i] - eta * dW[i];
+         //}
 
          if (!NoBias) {
             B[i] = B[i] - eta * dB[i];
@@ -1891,7 +1909,7 @@ public:
    int Correct;
    int Incorrect;
    ClassifierStats() : Correct(0), Incorrect(0) {}
-   void Eval(const ColVector& x, const ColVector& y) {
+   bool Eval(const ColVector& x, const ColVector& y) {
       assert(x.size() == y.size());
       int y_max_index = 0;
       int x_max_index = 0;
@@ -1907,10 +1925,11 @@ public:
       }
       if (x_max_index == y_max_index) {
          Correct++;
-      } else {
-         Incorrect++;
+         return true;
       }
-      return;
+
+      Incorrect++;
+      return false;
    }
    void Reset()
    {

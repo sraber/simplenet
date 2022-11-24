@@ -368,3 +368,4 @@ FodyWeavers.xsd
 *.xlsx
 *.filters
 /SelectSearch
+/SNCVMNIST/weights/LP1C4

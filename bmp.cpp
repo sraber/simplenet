@@ -1,6 +1,6 @@
 #include <cstdio>
 #include <string>
-#include <cassert>
+#include <iostream>
 
 // REVIEW: For a 3 class problem each of output probabilities can be scaled to 255 (R, G, B) to
 //         give a real picture ot the class boundaries.
@@ -22,7 +22,10 @@ void generateBitmapImage(unsigned char* image, int height, int width, int pitch,
 
    FILE* imageFile;
    errno_t res = fopen_s(&imageFile, imageFileName.c_str(), "wb");
-   assert( ("Could'nt open file." , res) == 0 );
+   if (res != 0) {
+      std::cerr << "Could'nt open file.";
+      return;
+   }
 
    fwrite(fileHeader, 1, fileHeaderSize, imageFile);
    fwrite(infoHeader, 1, infoHeaderSize, imageFile);

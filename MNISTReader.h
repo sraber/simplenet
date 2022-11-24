@@ -43,7 +43,7 @@ public:
    struct MNIST_Pair {
       ColVector x;
       ColVector y;
-      MNIST_Pair() {}
+      MNIST_Pair() : x(DIM), y(10){}
       MNIST_Pair(ColVector _x, ColVector _y) : x(_x), y(_y) {}
    };
 
@@ -128,17 +128,40 @@ public:
       return true;
    }
 
+      bool read_next_ex(ColVector& x, ColVector& y) {
+      // Note: The magic number, the image count, the rows number and the columns number
+      //       must be read prior to this call as it is simply a continuation of reading 
+      //       the file stream.
+      if (!images.read(buf_, DIM)) {
+         return false;
+      }
+      num_t inv = num_t{ 1.0 } / num_t{ 255.0 };
+      for (size_t i = 0; i != DIM; ++i)
+      {
+         x[i] = static_cast<uint8_t>(buf_[i]) * inv;
+      }
+
+      char label;
+      labels.read(&label, 1);
+
+      y.setZero();
+      y[static_cast<uint8_t>(label)] = 1.0;
+
+      return true;
+   }
+
    MNIST_list read_batch(int batch)
    {
       MNIST_list ml;
 
       for (int i = 1; i <= batch; i++) {
-         if (!read_next()) {
+         MNIST_Pair mp;
+         if (!read_next_ex( mp.x, mp.y )) {
             reset();
-            bool res = read_next(); // read_next can't go inside assert.  It won't be compiled on Release build.
+            bool res = read_next_ex( mp.x, mp.y ); // read_next can't go inside assert.  It won't be compiled on Release build.
             assert(("Error resetting batch",res));
          }
-         ml.emplace_back( MNIST_Pair(data(), label()) );
+         ml.emplace_back( move(mp) );
       }
       return ml;
    }
