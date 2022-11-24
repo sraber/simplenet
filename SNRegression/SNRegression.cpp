@@ -60,7 +60,7 @@ layer_list LayerList;
 
 void TestMPG(void)
 {
-   LayerList.push_back(make_shared<Layer>(1, 1, new actLinear(1),
+   LayerList.push_back(make_shared<Layer>(1, 1, make_unique<actLinear>(1),
                        make_shared<IOWeightsBinaryFile>(path, "SNRegress.1") ));
    ColVector X(1);
    X(0) = -0.5;
@@ -88,12 +88,12 @@ int main(int argc, char* argv[])
 
 
    //------------ setup the network ------------------------------
-   LayerList.push_back( make_shared<Layer>(1, 1, new actLinear(1), make_shared<IWeightsToConstants>(0.1, 0.0)
+   LayerList.push_back( make_shared<Layer>(1, 1, make_unique<actLinear>(1), make_shared<IWeightsToConstants>(0.1, 0.0)
       /*, "C:\\projects\\neuralnet\\simplenet\\SNRegression\\weights.csv"*/));
    LossL2 loss(1, 1);
    //-------------------------------------------------------------
    /*
-   Layer ly(1, 1, new actLinear(1), make_shared<InitWeightsToConstants>(-6.5, 23.515));
+   Layer ly(1, 1, make_unique<actLinear>(1), make_shared<InitWeightsToConstants>(-6.5, 23.515));
 
    ColVector X(1);
    ColVector Y(1);

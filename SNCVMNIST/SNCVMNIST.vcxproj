@@ -160,6 +160,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\bmp.cpp" />
+    <ClCompile Include="..\utility.cpp" />
     <ClCompile Include="SNCVMNIST.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -31,6 +31,8 @@
 
 #include <map>
 
+#include <utility.h>
+
 typedef vector< shared_ptr<Layer> > layer_list;
 typedef vector< shared_ptr<iConvoLayer> > convo_layer_list;
 convo_layer_list ConvoLayerList;
@@ -323,44 +325,6 @@ public:
    }
 };
 
-void MakeMatrixImage(string file, Matrix m)
-{
-   pixel_data pixel;
-   int rows = (int)m.rows();
-   int cols = (int)m.cols();
-
-   unsigned char* pbytes = new unsigned char[rows * cols * sizeof(pixel_data)]; // 24 bit BMP
-   unsigned char* pbs = pbytes;
-   for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < cols; c++) {
-         double v = m(r, c) * 254;
-         pixel.r = static_cast<unsigned char>(v);
-         pixel.g = static_cast<unsigned char>(v);
-         pixel.b = static_cast<unsigned char>(v);
-
-         std::memcpy(pbs, &pixel, sizeof(pixel_data));
-         pbs += sizeof(pixel_data);
-      }
-   }
-
-   generateBitmapImage(pbytes, rows, cols, cols * sizeof(pixel_data), file);
-}
-
-void ScaleToOne(double* pdata, int size)
-{
-   double max = 0.0;
-   double min = 0.0;
-   double* pd = pdata;
-   double* pde = pd + size;
-   for (; pd < pde; pd++) {
-      if (max < *pd) { max = *pd; }
-      if (min > * pd) { min = *pd; }
-   }
-   for (pd = pdata; pd < pde; pd++) {
-      *pd = (*pd - min) / (max - min);
-   }
-}
-
 void ScalePerLeNet98(double* pdata, int size)
 {
    // According to LeCun's 1998 paper, map the extrema of the image
@@ -578,21 +542,7 @@ int GetLabel(ColVector& lv)
    return 0;
 }
 
-class OMultiWeightsBMP : public iPutWeights{
-   string Path;
-   string RootName;
-public:
-   OMultiWeightsBMP(string path, string root_name) : RootName(root_name), Path(path) {}
-   void Write(const Matrix& m, int k) {
-      string str_count;
-      str_count = to_string(k);
-      string pathname = Path + "\\" + RootName + "." + str_count + ".bmp";
-      Matrix temp;
-      temp = m;
-      ScaleToOne(temp.data(), (int)temp.size());
-      MakeMatrixImage(pathname, temp);
-   }
-};
+
 
 //---------------------------------------------------------------------------------
 //                         Big Kernel Method
@@ -2238,8 +2188,14 @@ void MakeCorrelations(string dataroot, int label)
 
 class MatrixManipulator
 {
+   // The number of shifts plus the origional.  This number
+   // can only be changed in conjunction with work on the shift method.
    const int N = 5;
-   const int M = 5;
+   // The number of rotations plus zero rotation.
+   // This number should be odd.
+   const int M = 3;
+   // How much to shift the image left or right.
+   const int SHIFT = 1;
    const int LpRows;
    const int LpCols;
    int S;
@@ -2259,12 +2215,20 @@ public:
    {
       ShiftState.resize(Base.rows(), Base.cols());
       lpsm = PrecomputeLogPolarSupportMatrix(28, 28, lprows, lpcols);
-      shift();
-      computeLP();
+      begin();
    }
+
    bool isDone()
    {
       return (S == N && A == M);
+   }
+
+   void begin()
+   {
+      A = 0;
+      S = 0;
+      shift();
+      computeLP();
    }
 
    void next()
@@ -2290,24 +2254,24 @@ private:
    {
       const int rows = Base.rows();
       const int cols = Base.cols();
-      const int r2 = rows - 2;
-      const int c2 = cols - 2;
+      const int r2 = rows - SHIFT;
+      const int c2 = cols - SHIFT;
       ShiftState.setZero();
       switch (S) {
          case 0:
             ShiftState = Base;
             break;
          case 1:
-            ShiftState.block(0, 0, r2, c2) = Base.block(2, 2, r2, c2);
+            ShiftState.block(0, 0, r2, c2) = Base.block(SHIFT, SHIFT, r2, c2);
             break;
          case 2:
-            ShiftState.block(2, 0, r2, c2) = Base.block(0, 2, r2, c2);
+            ShiftState.block(SHIFT, 0, r2, c2) = Base.block(0, SHIFT, r2, c2);
             break;
          case 3:
-            ShiftState.block(0, 2, r2, c2) = Base.block(2, 0, r2, c2);
+            ShiftState.block(0, SHIFT, r2, c2) = Base.block(SHIFT, 0, r2, c2);
             break;
          case 4:
-            ShiftState.block(2, 2, r2, c2) = Base.block(0, 0, r2, c2);
+            ShiftState.block(SHIFT, SHIFT, r2, c2) = Base.block(0, 0, r2, c2);
             break;
          default:
             cout << "Something wrong." << endl;

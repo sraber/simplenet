@@ -1,4 +1,5 @@
-#pragma once
+#ifndef _LAYER_H
+#define _LAYER_H
 
 #include <Eigen>
 #include <iostream>
@@ -1952,3 +1953,5 @@ public:
          owf << e << endl;
       }
    };
+
+   #endif // !_LAYER_H
