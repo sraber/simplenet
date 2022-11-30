@@ -3211,27 +3211,37 @@ int main(int argc, char* argv[])
       // so depending on where the implementation of the interface is used I would know what items
       // to expect back.  For example: the FilterLayer property would return keys: "W","dW", ect..
       //
-      //union LayerCallBackItem {
-      //   const Matrix& m;
-      //   const vector_of_matrix& vm;
-      //   const vector_of_number& vn;
-      //};
 
-      //struct LayerCallBackObj {
-      //   enum Type{
-      //      Mat, VMat , VNum
-      //   };
-      //   Type t;
-      //   LayerCallBackItem item;
-      //};
 
-      //class iCallBack
-      //{
-      //   virtual ~iCallBack() = 0 {};
-      //   virtual  std::map<string, LayerCallBackObj> Propeties();
-      //};
 
-      //exit(0);
+      class iCallBack
+      {
+      public:
+         struct CallBackObj {
+            union {
+               std::reference_wrapper<const int> i;
+               std::reference_wrapper<const long> l;
+               std::reference_wrapper<const double> d;
+               std::reference_wrapper<const Matrix> m;
+               std::reference_wrapper<const vector_of_matrix> vm;
+               std::reference_wrapper<const vector_of_number> vn;
+            };
+            enum class Type{
+               Int, Long, Doub, Mat, VMat , VNum
+            };
+            Type t;
+            CallBackObj(int& x) { i = x; t = Type::Int; }
+            CallBackObj(long& x) { l = x; t = Type::Long; }
+            CallBackObj(double& x) { d = x; t = Type::Doub; }
+            CallBackObj(Matrix& x) { m = x; t = Type::Mat; }
+            CallBackObj(vector_of_matrix& x) { vm = x; t = Type::VMat; }
+            CallBackObj(vector_of_number& x) { vn = x; t = Type::VNum; }
+         };
+         virtual ~iCallBack() = 0 {};
+         virtual  unique_ptr< std::map<string, CallBackObj> > Propeties() = 0 {};
+      };
+
+      exit(0);
 
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {

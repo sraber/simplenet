@@ -117,7 +117,6 @@ public:
    virtual vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true) = 0;
    virtual void Update(double eta) = 0;
    virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
-
 };
 
 typedef iConvoLayer::Size clSize;
@@ -797,6 +796,7 @@ private:
    {
       if (icb != nullptr) {
          icb->Propeties(NoBias, X, W, iter_dW, B, dB, Z);
+         iter_dW.clear();
       }
    }
 public:
@@ -1164,6 +1164,9 @@ public:
       // because the derivitive of each of the kernel elements results in
       // this simplification.
       Matrix iter_dW(KernelSize.rows, KernelSize.cols);
+
+      // This is needed if the Backprop Callback property is used.
+      // It is initialized by the BACKPROP_CALLBACK_PREP prep macro.
       vector_of_matrix debug_iter_dW;
 
       // Allocate the vector of matrix for the return but only allocate

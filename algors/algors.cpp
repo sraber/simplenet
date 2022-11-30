@@ -15,12 +15,16 @@
 
 #include "fft1.h"
 #include "fftn.h"
+#include <complex>
 
 #include <opencv2\\core.hpp>
 #include <opencv2\\highgui.hpp>
 #include <opencv2\\imgproc.hpp>
 
 string path = "C:\\projects\\neuralnet\\simplenet\\algors\\results";
+
+void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign);
+void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor);
 
 void MakeMNISTImage(string file, Matrix m)
 {
@@ -793,6 +797,52 @@ void TestKernelFlipper1()
    cin >> c;
 }
 
+void TestKernelFlipper2()
+{
+   // Input matrix size.
+   const int n = 32;          // Layer input size.
+   // Kernel matrix size.
+   const int kn = 5;
+
+   const int cn = 28;         // Layer output size.  This is input matrix during backprop.
+
+   // Make a kernel matrix.  Unroll it into another matrix.
+   // Make a grad matrix.  Flatten that matrix and multiple by the unrolled matrix.
+   // Correlate the matrix with the 180 flip kernel.  The two methods should agree.
+
+   Matrix k(kn, kn);    // Kernel
+   // The incomming delta gradient.  This is the gradient that is formed by multiplying
+   // the child gradient with the activation jacobian.  It is the same size as the convolution
+   // that is output by the current layer.
+   // Here we just generate some random numbers to represent it.
+   Matrix g(n, n);
+
+   Matrix dc1(cn,cn);  
+   Matrix dc2(cn,cn);
+
+   k.setRandom();
+   g.setOnes();
+
+   fft2convolve(g, k, dc1, -1);
+
+   Rotate180(k);
+
+   fft2convolve(g, k, dc2, 1);
+
+   //OWeightsCSVFile mdc2(path,"dc2");
+   //mdc2.Write(dc2,1);
+
+   Matrix dif(cn, cn);
+   dif = dc1 - dc2;
+   dif.cwiseAbs();
+
+   cout << "Max dc1: " << dc1.cwiseAbs().maxCoeff() <<  " Max dc2: " << dc2.cwiseAbs().maxCoeff() << " Max dif: " << dif.maxCoeff() << endl;
+
+   cout << "enter a key and press Enter" << endl;
+   char c;
+   cin >> c;
+}
+
 void MakeCenterCircle(Matrix& m, double rad)
 {
    int n = m.rows();
@@ -1142,15 +1192,192 @@ void rlft2(Doub *data, ColVector& speq,
 	if (isign == -1) fourn(data,nn,2,isign);
 }
 
+void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign )
+{
+   const int mrows = m.rows();
+   const int mcols = m.cols();
+   const int hrows = h.rows();
+   const int hcols = h.cols();
+   const int orows = out.rows();
+   const int ocols = out.cols();
+
+   assert(_Is_pow_2(mrows));
+   assert(_Is_pow_2(mcols));
+   assert(mrows == hrows);
+   assert(mcols == hcols);
+   assert(mrows == orows);
+   assert(mcols == ocols);
+
+   const int rows = mrows;
+   const int cols = mcols;
+
+   ColVector mnqrow(2 * cols);
+   ColVector hnqrow(2 * cols);
+   ColVector onqrow(2 * cols); 
+
+   rlft3(m.data(), mnqrow.data(),1, rows, cols, 1);
+   rlft3(h.data(), hnqrow.data(),1, rows, cols, 1);
+
+   double fac = 2.0 / (rows * cols);
+
+   const int OROWS = rows >> 1;
+   const int OCOLS = cols << 1;
+
+   Eigen::Map<Matrix> mo(m.data(), OROWS, OCOLS);
+   Eigen::Map<Matrix> ho(h.data(), OROWS, OCOLS);
+   Eigen::Map<Matrix> oo(out.data(), OROWS, OCOLS);
+
+   for (int row = 0; row < OROWS; row++ ) {
+      for (int col = 0; col < OCOLS; col+=2 ) {
+         double a = mo(row, col);
+         double b = mo(row, col + 1);
+         double c = ho(row, col);
+         double d = sign * ho(row, col + 1); // Conjugate
+
+         oo(row, col)      = fac * (a*c - d*b);
+         oo(row, col + 1)  = fac * (c*b + a*d);
+      }
+   }
+
+   for (int col = 0; col < OCOLS; col+=2 ) {
+      double a = mnqrow(col);
+      double b = mnqrow(col + 1);
+      double c = hnqrow(col);
+      double d = sign * hnqrow(col + 1);  // Conjugate
+
+      onqrow(col) = fac * (a*c - d*b);
+      onqrow(col + 1) = fac * (c*b + a*d);
+   }
+
+   rlft3(out.data(), onqrow.data(),1, rows, cols, -1);
+
+   int or2 = orows >> 1;
+   int oc2 = ocols >> 1;
+
+   // This is FFT shift.
+   Matrix t(or2, oc2);
+   t = out.block(or2, oc2, or2, oc2);
+   out.block(or2, oc2, or2, oc2) = out.block(0, 0, or2, oc2);
+   out.block(0, 0, or2, oc2) = t;
+
+   t = out.block(or2, 0, or2, oc2);
+   out.block(or2, 0, or2, oc2) = out.block(0, oc2, or2, oc2);
+   out.block(0, oc2, or2, oc2) = t;
+}
+
+#define padm 0x0001
+#define padh 0x0002
+#define pado 0x0004
+#define padall (padm | padh | pado)
+
+void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor )
+{
+   const int mrows = m.rows();
+   const int mcols = m.cols();
+   const int hrows = h.rows();
+   const int hcols = h.cols();
+   const int orows = o.rows();
+   const int ocols = o.cols();
+
+   //const Matrix* mw = &m;
+   //const Matrix* hw = &h;
+   Matrix* ow = &o;
+
+   Matrix pm;
+   Matrix ph;
+   Matrix po;
+
+   // This traslation is necessary to align the output with
+   // the linear (space based) algorithms.
+   // The problem is that a row and column are lost if this
+   // is done.
+   //Matrix t = h.block(0, 0, hrows - 1, hcols - 1);
+   //h.block(1, 1, hrows - 1, hcols - 1) = t;
+
+   unsigned int pad = 0;
+
+   int rows = 0;
+   if (rows < mrows) { rows = mrows; }
+   if (rows < hrows) { rows = hrows; }
+   if (rows < orows) { rows = orows; }
+
+   int cols = 0;
+   if (cols < mcols) { cols = mcols; }
+   if (cols < hcols) { cols = hcols; }
+   if (cols < ocols) { cols = ocols; }
+
+   if (!std::_Is_pow_2(rows)) { rows = nearest_power_ceil(rows); pad = padall;  }
+   if (!std::_Is_pow_2(cols)) { cols = nearest_power_ceil(cols); pad = padall;  }
+
+   int cr = rows >> 1; cr--;
+   int cc = cols >> 1; cc--;
+
+   //if (mrows != rows || mcols != cols) {
+      pad |= padm;
+      pm.resize(rows, cols);
+
+      int cmr = mrows >> 1; if (!(mrows % 2)) { cmr--; }
+      int cmc = mcols >> 1; if (!(mcols % 2)) { cmc--; }
+      int sr = cr - cmr;
+      int sc = cc - cmc;
+
+      pm.setZero();
+      pm.block(sr, sc, mrows, mcols) = m;
+      //mw = &pm;
+   //}
+   //if (hrows != rows || hcols != cols) {
+      pad |= padh;
+      ph.resize(rows, cols);
+
+      int chr = hrows >> 1; if (!(hrows % 2)) { chr--; }
+      int chc = hcols >> 1; if (!(hcols % 2)) { chc--; }
+      sr = cr - chr;
+      sc = cc - chc;
+
+      ph.setZero();
+      ph.block(sr, sc, hrows, hcols) = h;
+      //hw = &ph;
+      //}
+   if (orows != rows || ocols != cols) {
+      pad |= pado;
+      po.resize(rows, cols);
+      //po.setZero();
+      //po.block(0, 0, orows, ocols) = o;
+      ow = &po;
+   }
+
+   //fft2ConCor(*mw, *hw, *ow, con_cor);
+   fft2ConCor(pm, ph, *ow, con_cor);
+
+   if (pad & pado) {
+      int cor = orows >> 1; if (!(orows % 2)) { cor--; }
+      int coc = ocols >> 1; if (!(ocols % 2)) { coc--; }
+      int sr = cr - cor;
+      int sc = cc - coc;
+
+      o = ow->block(sr, sc, orows, ocols);
+   }
+}
+
+void fft2convo(Matrix& m, Matrix& h, Matrix& o)
+{
+   fft2convolve(m, h, o, 1);
+}
+
 int main()
+
 {
     std::cout << "Algorithm Tester!\n";
     //TestKernelFlipper1();
-    //TestObjectDetection();
-    TestEdgeDetect();
+    //TestKernelFlipper2();
+    //TestObjectDetection();\
+    //TestEdgeDetect();
+
+    TestFilterFunction(31, 11, 31, "fc_31_11_31",fft2convo);
+    TestFilterFunction(31, 11, 31, "lc_31_11_31",LinearConvolution3);
 
     //REVIEW:
-    // The test image was tainting the comparisons.  Fix the test image
+    // The test image was tainting the comparisons.  Fixed the test image
     // and now the correlation and convolution algorithms produce same
     // result for a symetric test pattern.
     // Now need to reconcile this with the Kernel Flipping algor
@@ -1223,9 +1450,10 @@ int main()
 
    exit(0);
    */
-    /*
+
+   /*
    Matrix t(64, 64);
-   const double center = 32.5;
+   const double center = 31.5;
    for (int row = 0; row < 64; row++) {
       for (int col = 0; col < 64; col++) {
          double x = center - (double)col;
@@ -1239,15 +1467,87 @@ int main()
       }
    }
 
-   ofstream owf(path + "\\t.csv", ios::trunc);
+   Matrix tt(64, 128);
+   tt.setZero();
+   for (int row = 0; row < 64; row++) {
+      for (int col = 0; col < 64; col++) {
+         int cc = 2 * col;
+
+         tt(row, cc) = t(row,col);
+      }
+   }
+   /*
+   unsigned long nn[2];
+   nn[0] = 64;
+   nn[1] = 64;
+   fourn(tt.data(), nn, 2, 1);
+
+   Matrix rel(64, 64);
+   Matrix img(64, 64);
+
+   for (int row = 0; row < 64; row++) {
+      for (int col = 0; col < 64; col++) {
+         int cc = 2 * col;
+
+         double a = tt(row,cc);
+         double b = tt(row,cc + 1);
+
+         tt(row, cc) = a*a - b*b;
+         tt(row, cc+1) = 2.0 * a * b;
+      }
+   }
+
+   fourn(tt.data(), nn, 2, -1);
+
+   for (int row = 0; row < 64; row++) {
+      for (int col = 0; col < 64; col++) {
+         int cc = 2 * col;
+
+         t(row, col) = tt(row,cc);
+      }
+   }
+
+   */
+/*
+   Matrix h = t;
+   Matrix o(64, 64);
+   fft2ConCor(t, h, o, -1);
+   */
+/*
+   //LinearCorrelate3(t, h, o);
+   Matrix real(32, 32);
+   for (int row = 0; row < 32; row++) {
+      for (int col = 0; col < 32; col++) {
+         double a = o(row, 2 * col);
+         double b = o(row, 2 * col + 1);
+
+         real(row, col) = a;
+      }
+   }
+ */  
+   //ofstream owf(path + "\\c.csv", ios::trunc);
+   //owf << o;
+   //owf.close();
+   /*
+   owf.open(path + "\\real.csv", ios::trunc);
    assert(owf.is_open());
-   owf << t;
+   owf << rel;
    owf.close();
 
+   owf.open(path + "\\imag.csv", ios::trunc);
+   owf << img;
+   owf.close();
+   */
+ 
+    
+  /*
    //!!!!!!!!!!!!!!!!!!  2D FFT Test  !!!!!!!!!!!!!!!!!!!
    //unsigned long dims[] = { 64, 64 };
    ColVector speq(2*64);
    rlft2(t.data(), speq, 64, 64, 1);
+   double fac = 2.0 / (64 * 64);
+   t.array() *= fac;
+   speq.array() *= fac;
 
    Matrix rel(32, 33);
    Matrix img(32, 33);
@@ -1285,9 +1585,9 @@ int main()
    assert(owf.is_open());
    owf << spc;
    owf.close();
-   
-   exit(0);
    */
+  // exit(0);
+ 
    //test_amoeba();
    //exit(0);
 }
