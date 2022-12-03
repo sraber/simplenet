@@ -16,6 +16,7 @@
 
 #include <Eigen>
 #include <iostream>
+#include <strstream>
 #include <iomanip>
 #include <MNISTReader.h>
 #include <Layer.h>
@@ -32,6 +33,7 @@
 #include <map>
 
 #include <utility.h>
+//#include <Windows.h>
 
 typedef vector< shared_ptr<Layer> > layer_list;
 typedef vector< shared_ptr<iConvoLayer> > convo_layer_list;
@@ -42,9 +44,39 @@ shared_ptr<iLossLayer> loss;
 string path = "C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\weights";
 string model_name = "layer";
 
+class myCallBack : public iCallBackSink
+{
+   int count;
+public:
+   myCallBack() {
+      count = 0;
+   }
+   // Inherited via iCallBackSink
+   void Properties(std::map<string, CallBackObj>& props) override
+   {
+      if (count++ == 100) {
+         count = 0;
+         const vector_of_matrix& z = props["Z"].vm.get();
+         cout << "Norm Z:" ;
+         for (auto m : z) {
+            //strstream sstr;
+            cout << //props["dG"].rv.get().norm() << "," <<
+                                       //props["X"].cv.get().norm() << "," <<
+                                       //props["idW"].m.get().norm() << "," <<
+               m.norm() << ", ";
+            //OutputDebugString(sstr.str());
+            //sstr.freeze(false);
+         }
+         cout << endl;
+      }
+   }
+};
+shared_ptr<iCallBackSink> MCB = make_shared<myCallBack>();
+
 // ---------------------------------------------------
 // Special layer to remove mean.
 //
+
 class RemMeanLayer2D : 
    public iConvoLayer {
 public:
@@ -61,33 +93,22 @@ public:
    vector_of_matrix Z;
    unique_ptr<iActive> pActive;
 
-   // REVIEW: This needs to be redefined.
-   class iCallBack
-   {
-   public:
-      virtual ~iCallBack() = 0 {};
-      virtual void Propeties(
-         const vector_of_matrix& x,
-         const vector_of_matrix& z) = 0;
-   };
-
 private:
-   shared_ptr<iCallBack> EvalPreActivationCallBack;
-   shared_ptr<iCallBack> EvalPostActivationCallBack;
-   shared_ptr<iCallBack> BackpropCallBack;
+   shared_ptr<iCallBackSink> EvalPreActivationCallBack;
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
 
-   inline void CALLBACK(shared_ptr<iCallBack> icb)
+   inline void callback(shared_ptr<iCallBackSink> icb, int id)
    {
       if (icb != nullptr) {
-         icb->Propeties(X, Z);
+         map<string, CBObj> props;   
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPreActivationCallBack->Properties( props );
       }
    }
-   inline void BACKPROPCALLBACK(shared_ptr<iCallBack> icb)
-   {
-      if (icb != nullptr) {
-         icb->Propeties(X, Z);
-      }
-   }
+
 public:
 
    RemMeanLayer2D(Size input_size, int input_channels, unique_ptr<iActive> _pActive ) :
@@ -126,7 +147,7 @@ public:
 
       vector_of_matrix vecOut(Z.size());
 
-      CALLBACK(EvalPreActivationCallBack);
+      callback(EvalPreActivationCallBack, 1);
 
       for (Matrix& mm : vecOut) { mm.resize(InputSize.rows, InputSize.cols); }
       vector_of_matrix::iterator iz = Z.begin();
@@ -137,7 +158,7 @@ public:
          v = pActive->Eval(z);
       }
 
-      CALLBACK(EvalPostActivationCallBack);
+      callback(EvalPostActivationCallBack, 2);
 
       return vecOut;
    }
@@ -173,7 +194,7 @@ public:
 
          i++;
       }
-      BACKPROPCALLBACK(BackpropCallBack);
+      callback(BackpropCallBack,3);
       return vm_backprop_grad;
    }
 
@@ -181,11 +202,12 @@ public:
 
    void Save(shared_ptr<iPutWeights> _pOut) {}
 
-   void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
-   void SetEvalPostActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPostActivationCallBack = icb; }
-   void SetBackpropCallBack(shared_ptr<iCallBack> icb) {  BackpropCallBack = icb; }
+   void SetEvalPreActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPreActivationCallBack = icb; }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 //----------------------------------------------------
+
 double MultiplyBlock1( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
 {
    double sum = (m.array().block(mr, mc, size_r, size_c) * h.array().block(hr, hc, size_r, size_c)).sum();
@@ -195,12 +217,12 @@ double MultiplyBlock1( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int
 
 void LinearCorrelate3( Matrix& m, Matrix& h, Matrix& out )
 {
-   const int mrows = m.rows();
-   const int mcols = m.cols();
-   const int hrows = h.rows();
-   const int hcols = h.cols();
-   const int orows = out.rows();
-   const int ocols = out.cols();
+   const int mrows = (int)m.rows();
+   const int mcols = (int)m.cols();
+   const int hrows = (int)h.rows();
+   const int hcols = (int)h.cols();
+   const int orows = (int)out.rows();
+   const int ocols = (int)out.cols();
    int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; } 
    int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; } 
    int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; } 
@@ -1341,6 +1363,7 @@ void InitLPModel1(bool restore)
    assert(!(size_in.rows % size_out.rows));
    assert(!(size_in.cols % size_out.cols));
    ConvoLayerList.push_back(make_shared<poolAvg2D>(size_in, chn_in, size_out) );
+   dynamic_pointer_cast<poolAvg2D>( ConvoLayerList.back() )->SetEvalPostActivationCallBack( MCB );
    l++;
    //---------------------------------------------------------------
    // Flattening Layer --------------------------------------------
@@ -2193,7 +2216,7 @@ class MatrixManipulator
    const int N = 5;
    // The number of rotations plus zero rotation.
    // This number should be odd.
-   const int M = 3;
+   const int M = 1;
    // How much to shift the image left or right.
    const int SHIFT = 1;
    const int LpRows;
@@ -2547,8 +2570,6 @@ void Train(int nloop, string dataroot, double eta, int load)
                      clvgo_write(i, vm_backprop); // Debug
                   }
                   else {
-                     // REVIEW: Add a visitor interface to BackProp that can be used
-                     //         to produce metric's such as scale of dW.
                      g = LayerList[i]->BackProp(g);
                      lvgo_write(i, g); // Debug
                   }
@@ -3167,7 +3188,6 @@ void Correlate(string name1, string name2, string name_out)
 //      !!!   MOMENTUM currently defined for this project.  !!!
 //      Would be interesting to do a comparison of error curve with and without momentum.
 
-
 int main(int argc, char* argv[])
 {
    try {
@@ -3204,45 +3224,7 @@ int main(int argc, char* argv[])
             cnt++;
          }
       */
-
-      // REVIEW:
-      // Could use the code below to generalize the iCallBack interface so that it
-      // can be used all through the network.  The map key would be used to access the properties and
-      // so depending on where the implementation of the interface is used I would know what items
-      // to expect back.  For example: the FilterLayer property would return keys: "W","dW", ect..
-      //
-
-
-
-      class iCallBack
-      {
-      public:
-         struct CallBackObj {
-            union {
-               std::reference_wrapper<const int> i;
-               std::reference_wrapper<const long> l;
-               std::reference_wrapper<const double> d;
-               std::reference_wrapper<const Matrix> m;
-               std::reference_wrapper<const vector_of_matrix> vm;
-               std::reference_wrapper<const vector_of_number> vn;
-            };
-            enum class Type{
-               Int, Long, Doub, Mat, VMat , VNum
-            };
-            Type t;
-            CallBackObj(int& x) { i = x; t = Type::Int; }
-            CallBackObj(long& x) { l = x; t = Type::Long; }
-            CallBackObj(double& x) { d = x; t = Type::Doub; }
-            CallBackObj(Matrix& x) { m = x; t = Type::Mat; }
-            CallBackObj(vector_of_matrix& x) { vm = x; t = Type::VMat; }
-            CallBackObj(vector_of_number& x) { vn = x; t = Type::VNum; }
-         };
-         virtual ~iCallBack() = 0 {};
-         virtual  unique_ptr< std::map<string, CallBackObj> > Propeties() = 0 {};
-      };
-
-      exit(0);
-
+      
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {
             cout << "Not enough parameters.  Parameters: train | epochs | eta | read stored coefs (0|1) [optional] | dataroot [optional] | path [optional]" << endl;

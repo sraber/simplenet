@@ -134,6 +134,49 @@ public:
 };
 //-----------------------------------------------------------
 
+//---------- The Layer Call Back Interface ------------------
+// An implementation of this interface can be passed to layer objects
+// At certain places in the object code the Properties method is
+// called which passes a reference to working variables back to
+// the implementor.  These values can be used for debugging and 
+// observation.
+//
+class iCallBackSink
+{
+public:
+   struct CallBackObj {
+      union {
+         std::reference_wrapper<const int> i;
+         std::reference_wrapper<const long> l;
+         std::reference_wrapper<const double> d;
+         std::reference_wrapper<const Matrix> m;
+         std::reference_wrapper<const ColVector> cv;
+         std::reference_wrapper<const RowVector> rv;
+         std::reference_wrapper<const vector_of_matrix> vm;
+         std::reference_wrapper<const vector_of_number> vn;
+      };
+      enum class Type{
+         Int, Long, Doub, Mat, CVec, RVec, VMat , VNum
+      };
+      Type t;
+      CallBackObj() {}
+      CallBackObj(const int& x) { i = x; t = Type::Int; }
+      CallBackObj(const long& x) { l = x; t = Type::Long; }
+      CallBackObj(const double& x) { d = x; t = Type::Doub; }
+      CallBackObj(const Matrix& x) { m = x; t = Type::Mat; }
+      CallBackObj(const ColVector& x) { cv = x; t = Type::CVec; }
+      CallBackObj(const RowVector& x) { rv = x; t = Type::RVec; }
+      CallBackObj(const vector_of_matrix& x) { vm = x; t = Type::VMat; }
+      CallBackObj(const vector_of_number& x) { vn = x; t = Type::VNum; }
+   };
+   virtual ~iCallBackSink() = 0 {};
+   virtual void Properties( std::map<string, CallBackObj>& props) = 0 {};
+};
+
+typedef iCallBackSink::CallBackObj CBObj;
+
+//-----------------------------------------------------------
+
 //---------- Weight initializer and output implementations -----
 
 class IWeightsToConstants : public iGetWeights {
@@ -603,36 +646,11 @@ public:
    Matrix stash_W;
    Matrix dW;
    unique_ptr<iActive> pActive;
-
-   class iCallBack
-   {
-   public:
-      virtual ~iCallBack() = 0 {};
-      virtual void Propeties(
-         const ColVector& x,
-         const Matrix& w, const Matrix& dw,
-         const ColVector& z) = 0;
-   };
-
+   enum CallBackID { EvalPreActivation, EvalPostActivation, Backprop };
 private:
-
-   shared_ptr<iCallBack> EvalPreActivationCallBack;
-   shared_ptr<iCallBack> EvalPostActivationCallBack;
-   shared_ptr<iCallBack> BackpropCallBack;
-
-   inline void CALLBACK(shared_ptr<iCallBack> icb)
-   {
-      if (icb != nullptr) {
-         icb->Propeties( X, W, dW, Z);
-      }
-   };
-   inline void BACKPROPCALLBACK(shared_ptr<iCallBack> icb, Matrix& iter_dW)
-   {
-      if (icb != nullptr) {
-         icb->Propeties(X, W, iter_dW, Z);
-      }
-   }
-
+   shared_ptr<iCallBackSink> EvalPreActivationCallBack;
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
 public:
    Layer(int input_size, int output_size, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit ) :
       // Add an extra row to align with the bias weight.
@@ -671,13 +689,31 @@ public:
       X.topRows(InputSize) = _x;   // Will throw an exception if _x.size != InputSize
       X(InputSize) = 1;            // This accounts for the bias weight.
       Z = W * X;
-      CALLBACK(EvalPreActivationCallBack);
+
+      if (EvalPreActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = EvalPreActivation;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "W", CBObj(W) });
+         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPreActivationCallBack->Properties( props );
+      }
+
       // NOTE: The Active classes use the flyweight pattern.
       //       Z is an in/out variable, its contents may be modified by Eval
       //       but its dimension will not be changed.
       if (EvalPostActivationCallBack != nullptr) {
          ColVector out = pActive->Eval( Z );
-         EvalPostActivationCallBack->Propeties( X, W, dW, Z);
+         map<string, CBObj> props;
+         int id = EvalPostActivation;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "W", CBObj(W) });
+         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "Z", CBObj(out) });
+         EvalPostActivationCallBack->Properties( props );
          return out;
       }
       return pActive->Eval( Z );
@@ -687,7 +723,6 @@ public:
       Count++;
       RowVector delta_grad = child_grad * pActive->Jacobian(Z);
       Matrix iter_w_grad = X * delta_grad;
-      BACKPROPCALLBACK(BackpropCallBack, iter_w_grad);
 
 #ifdef MOMENTUM
       // REVIEW: Momentum 
@@ -706,6 +741,18 @@ public:
       double b = 1.0 - a;
       dW = a * iter_w_grad + b * dW;
 #endif
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = Backprop;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "W", CBObj(W) });
+         props.insert({ "dG", CBObj(delta_grad) });
+         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "idW", CBObj(iter_w_grad) });
+         props.insert({ "Z", CBObj(Z) });
+         BackpropCallBack->Properties( props );
+      }
 
       if (want_layer_grad) {
          return (delta_grad * W.block(0,0,OutputSize, InputSize));
@@ -727,9 +774,9 @@ public:
       cout << "Weights saved" << endl;
    }
 
-   void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
-   void SetEvalPostActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPostActivationCallBack = icb; }
-   void SetBackpropCallBack(shared_ptr<iCallBack> icb) {  BackpropCallBack = icb; }
+   void SetEvalPreActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPreActivationCallBack = icb; }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 //---------------------------------------------------------------
 
@@ -769,36 +816,13 @@ public:
    vector_of_matrix Z;
    unique_ptr<iActive> pActive;
    bool NoBias;
-
-   class iCallBack
-   {
-   public:
-      virtual ~iCallBack() = 0 {};
-      virtual void Propeties(const bool& no_bias,
-         const vector_of_matrix& x,
-         const vector_of_matrix& w, const vector_of_matrix& dw,
-         const vector_of_number& b, const vector_of_number& db,
-         const vector_of_matrix& z) = 0;
-   };
+   enum CallBackID { EvalPreActivation, EvalPostActivation, Backprop1, Backprop2 };
 
 private:
-   shared_ptr<iCallBack> EvalPreActivationCallBack;
-   shared_ptr<iCallBack> EvalPostActivationCallBack;
-   shared_ptr<iCallBack> BackpropCallBack;
+   shared_ptr<iCallBackSink> EvalPreActivationCallBack;
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
 
-   inline void CALLBACK(shared_ptr<iCallBack> icb)
-   {
-      if (icb != nullptr) {
-         icb->Propeties(NoBias, X, W, dW, B, dB, Z);
-      }
-   }
-   inline void BACKPROPCALLBACK(shared_ptr<iCallBack> icb, vector_of_matrix& iter_dW)
-   {
-      if (icb != nullptr) {
-         icb->Propeties(NoBias, X, W, iter_dW, B, dB, Z);
-         iter_dW.clear();
-      }
-   }
 public:
 
    FilterLayer2D(Size input_size, int input_channels, Size output_size, Size kernel_size, int kernel_number, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
@@ -1117,7 +1141,16 @@ public:
       vecLinearCorrelate();
       vector_of_matrix vecOut(Z.size());
 
-      CALLBACK(EvalPreActivationCallBack);
+      if (EvalPreActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = EvalPreActivation;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "W", CBObj(W) });
+         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPreActivationCallBack->Properties( props );
+      }
 
       for (Matrix& mm : vecOut) { mm.resize(OutputSize.rows, OutputSize.cols); }
       vector_of_matrix::iterator iz = Z.begin();
@@ -1130,7 +1163,16 @@ public:
          v = pActive->Eval(z);
       }
 
-      CALLBACK(EvalPostActivationCallBack);
+      if (EvalPostActivationCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = EvalPostActivation;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "W", CBObj(W) });
+         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "Z", CBObj(vecOut) });
+         EvalPostActivationCallBack->Properties( props );
+      }
 
       return vecOut;
    }
@@ -1165,10 +1207,6 @@ public:
       // this simplification.
       Matrix iter_dW(KernelSize.rows, KernelSize.cols);
 
-      // This is needed if the Backprop Callback property is used.
-      // It is initialized by the BACKPROP_CALLBACK_PREP prep macro.
-      vector_of_matrix debug_iter_dW;
-
       // Allocate the vector of matrix for the return but only allocate
       // the matricies if the caller wants them, else we'll return an empty vector.
       // We have to return something!
@@ -1196,7 +1234,16 @@ public:
          // Recall that rv_delta_grad is a vector map onto m_delta_grad.
          LinearCorrelate(X[chn], m_delta_grad, iter_dW);
 
-         BACKPROP_CALLBACK_PREP
+         if (BackpropCallBack != nullptr) {
+            map<string, CBObj> props;
+            int id = Backprop1;
+            props.insert({ "ID", CBObj(id) });
+            props.insert({ "OC", CBObj(i) });  // Output Channel
+            props.insert({ "K", CBObj(chn) }); // Kernel
+            props.insert({ "dG", CBObj(m_delta_grad) });
+            props.insert({ "idW", CBObj(iter_dW) });
+            BackpropCallBack->Properties( props );
+         }
 
 #ifdef MOMENTUM
          // REVIEW: Momentum 
@@ -1226,7 +1273,18 @@ public:
          if (  !( (i+1) % KernelPerChannel ) ){  chn++; }
          i++;
       }
-      BACKPROPCALLBACK(BackpropCallBack, debug_iter_dW);
+
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = Backprop2;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "W", CBObj(W) });
+         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "Z", CBObj(Z) });
+         BackpropCallBack->Properties( props );
+      }
+
       return vm_backprop_grad;
    }
 
@@ -1259,13 +1317,17 @@ public:
       cout << "Weights saved" << endl;
    }
 
-   void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
-   void SetEvalPostActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPostActivationCallBack = icb; }
-   void SetBackpropCallBack(shared_ptr<iCallBack> icb) {  BackpropCallBack = icb; }
+   void SetEvalPreActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPreActivationCallBack = icb; }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 #undef BACKPROP_CALLBACK_PREP
 
 class poolMax2D : public iConvoLayer {
+   
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
+
 public:
    Size InputSize;
    Size OutputSize;
@@ -1345,6 +1407,14 @@ public:
       {
          MaxPool(_x[i], Z[i], Zr[i], Zc[i]);
       }
+      if (EvalPostActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(_x) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPostActivationCallBack->Properties( props );
+      }
       return Z;
    }
    vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
@@ -1352,6 +1422,14 @@ public:
       for (int i = 0; i < Channels; i++)
       {
          BackPool(X[i], child_grad[i], Zr[i], Zc[i]);
+      }
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;  
+         int id = 3;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "G", CBObj(child_grad) });
+         props.insert({ "X", CBObj(X) });
+         BackpropCallBack->Properties( props );
       }
       return X;
    }
@@ -1361,12 +1439,19 @@ public:
    void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
+
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 
 class poolAvg2D : public iConvoLayer {
    double Denominator;
    int rstep;
    int cstep;
+
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
+
 public:
    Size InputSize;
    Size OutputSize;
@@ -1449,6 +1534,14 @@ public:
       {
          AveragePool(_x[i], Z[i] );
       }
+      if (EvalPostActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(_x) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPostActivationCallBack->Properties( props );
+      }
       return Z;
    }
    vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
@@ -1456,6 +1549,14 @@ public:
       for (int i = 0; i < Channels; i++)
       {
          BackPool(X[i], child_grad[i] );
+      }
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;  
+         int id = 3;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "G", CBObj(child_grad) });
+         props.insert({ "X", CBObj(X) });
+         BackpropCallBack->Properties( props );
       }
       return X;
    }
@@ -1465,9 +1566,15 @@ public:
    void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 
 class poolMax3D : public iConvoLayer {
+   
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
+
 public:
    Size InputSize;
    Size OutputSize;
@@ -1568,6 +1675,14 @@ public:
       {
          MaxPool(_x, OutputMap[i], Z[i], Zr[i], Zc[i], Zm[i] );
       }
+      if (EvalPostActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(_x) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPostActivationCallBack->Properties( props );
+      }
       return Z;
    }
    vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
@@ -1579,6 +1694,14 @@ public:
       {
          BackPool(X, child_grad[i], Zr[i], Zc[i], Zm[i] );
       }
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;  
+         int id = 3;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "G", CBObj(child_grad) });
+         props.insert({ "X", CBObj(X) });
+         BackpropCallBack->Properties( props );
+      }
       return X;
    }
    void Update(double eta) 
@@ -1587,8 +1710,23 @@ public:
    void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
+
 class poolAvg3D : public iConvoLayer {
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
+   inline void callback(shared_ptr<iCallBackSink> icb, int id)
+   {
+      if (icb != nullptr) {
+         map<string, CBObj> props;   
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(X) });
+         props.insert({ "Z", CBObj(Z) });
+         icb->Properties( props );
+      }
+   }
 public:
    Size InputSize;
    Size OutputSize;
@@ -1679,6 +1817,15 @@ public:
       {
          AvgPool(_x, OutputMap[i], Z[i] );
       }
+      if (EvalPostActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(_x) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPostActivationCallBack->Properties( props );
+      }
+
       return Z;
    }
 
@@ -1691,6 +1838,14 @@ public:
       {
          BackPool(X, OutputMap[i], child_grad[i] );
       }
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;  
+         int id = 3;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "G", CBObj(child_grad) });
+         props.insert({ "X", CBObj(X) });
+         BackpropCallBack->Properties( props );
+      }
       return X;
    }
    void Update(double eta) 
@@ -1699,9 +1854,14 @@ public:
    void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
+
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 
 class Flatten2D : public iConvoLayer {
+   shared_ptr<iCallBackSink> EvalPostActivationCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
 public:
    Size InputSize;
 
@@ -1738,6 +1898,7 @@ public:
       assert(x.size() == Channels);
       double* pcv = Z[0].data();
       int step = InputSize.rows * InputSize.cols;
+
       for (int i = 0; i < Channels; i++){
          double* pmm = (double*)x[i].data();
          double* pcve = pcv + step;
@@ -1745,6 +1906,16 @@ public:
             *pcv = *pmm;
          }
       }
+
+      if (EvalPostActivationCallBack != nullptr) {
+         map<string, CBObj> props;   
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "X", CBObj(D) });
+         props.insert({ "Z", CBObj(Z) });
+         EvalPostActivationCallBack->Properties( props );
+      }
+
       return Z;
    }
    vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true)
@@ -1758,6 +1929,15 @@ public:
          rv = g.block(0, pos, 1, step);
          pos += step;
       }
+      
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;  
+         int id = 3;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "G", CBObj(g) });
+         props.insert({ "Z", CBObj(D) });
+         BackpropCallBack->Properties( props );
+      }
 
       return D;
    }
@@ -1767,6 +1947,9 @@ public:
    void Save(shared_ptr<iPutWeights> _pOut) 
    {
    }
+
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
 
 //--------------------------------------------------------------

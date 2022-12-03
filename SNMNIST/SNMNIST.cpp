@@ -2,10 +2,12 @@
 //
 #include <Eigen>
 #include <iostream>
+#include <strstream>
 #include <iomanip>
 #include <MNISTReader.h>
 #include <Layer.h>
 #include <chrono>
+#include <windows.h>
 
 typedef vector< shared_ptr<Layer> > layer_list;
 layer_list LayerList;
@@ -23,6 +25,23 @@ void SaveModelWeights()
    }
 }
 
+class myCallBack : public iCallBackSink
+{
+public:
+   // Inherited via iCallBackSink
+   void Properties(std::map<string, CallBackObj>& props) override
+   {
+      strstream sstr;
+      sstr << "Norm idW , dw: " << //props["dG"].rv.get().norm() << "," <<
+                               //props["X"].cv.get().norm() << "," <<
+                               props["idW"].m.get().norm() << "," <<
+                               props["dW"].m.get().norm() << "\n" << ends;
+      OutputDebugString(sstr.str());
+   }
+};
+
+shared_ptr<iCallBackSink> MCB = make_shared<myCallBack>();
+
 void InitFCModel(bool restore)
 {
    model_name = "FC32";
@@ -31,12 +50,13 @@ void InitFCModel(bool restore)
    // FC Layer 1 -----------------------------------------
    // Type: FC Layer
    int size_in  = MNISTReader::DIM;
-   int size_out = 32;
+   int size_out = 84;
 
    int l = 1; // Layer counter
    LayerList.push_back(make_shared<Layer>(size_in, size_out, make_unique<actReLU>(size_out),
                  restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                            dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );
+            LayerList.back()->SetBackpropCallBack( MCB  );
    l++;
 
    // FC Layer 2 -----------------------------------------
@@ -46,6 +66,8 @@ void InitFCModel(bool restore)
    LayerList.push_back(make_shared<Layer>(size_in, size_out, make_unique<actSoftMax>(size_out),
                  restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
                            dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );
+            LayerList.back()->SetBackpropCallBack( MCB  );
+
    l++;
 
    loss = make_shared<LossL2>(size_out, 1);   
