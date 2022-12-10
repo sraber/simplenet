@@ -386,7 +386,7 @@ public:
       string pathname = Path + "\\" + RootName + "." + str_count + ".csv";
       Put(m,pathname);
    }
-   void Write(string root_name, Matrix& m, int k) {
+   void Write(string root_name, const Matrix& m, int k) {
       RootName = root_name;
       Write(m, k);
    }
@@ -781,10 +781,6 @@ public:
 //---------------------------------------------------------------
 
 // Convolution Layer classes ------------------------------------
-#define BACKPROP_CALLBACK_PREP \
-if( BackpropCallBack!=nullptr ){ \
-   debug_iter_dW.push_back( Matrix(iter_dW) );\
-}
 
 class FilterLayer2D : 
    public iConvoLayer, 
@@ -1101,34 +1097,6 @@ public:
       }
    }
 
-   void Rotate180(Matrix& k)
-   {
-      assert(k.rows() == k.cols());  // No reason for this.
-                                     // The algor could handle rows != cols.
-      int kn = (int)k.rows();
-      // rotate k by 180 degrees ------------
-      int kn2 = kn / 2;
-      for (int i = 0; i < kn2; i++) {
-         int j = kn - i - 1;
-         for (int c1 = 0; c1 < kn; c1++) {
-            int c2 = kn - c1 - 1;
-            double temp = k(i, c1);
-            k(i, c1) = k(j, c2);
-            k(j, c2) = temp;
-         }
-      }
-      if (kn % 2) {
-         int j = kn / 2;  // Don't add 1.  The zero offset compensates.
-         for (int c1 = 0; c1 < kn2; c1++) {
-            int c2 = kn - c1 - 1;
-            double temp = k(j, c1);
-            k(j, c1) = k(j, c2);
-            k(j, c2) = temp;
-         }
-      }
-      //------------------------------------------
-   }
-
    vector_of_matrix Eval(const vector_of_matrix& _x) 
    {
       vector_of_matrix::const_iterator is = _x.begin();
@@ -1321,7 +1289,6 @@ public:
    void SetEvalPostActivationCallBack(shared_ptr<iCallBackSink> icb) {  EvalPostActivationCallBack = icb; }
    void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) {  BackpropCallBack = icb; }
 };
-#undef BACKPROP_CALLBACK_PREP
 
 class poolMax2D : public iConvoLayer {
    

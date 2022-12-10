@@ -2,8 +2,8 @@
 //
 #define LOGPOLAR
 #ifdef LOGPOLAR
-   const int INPUT_ROWS = 32;
-   const int INPUT_COLS = 32;
+   const int INPUT_ROWS = 512;
+   const int INPUT_COLS = 512;
 #else
    const int INPUT_ROWS = 28;
    const int INPUT_COLS = 28;
@@ -16,7 +16,6 @@
 
 #include <Eigen>
 #include <iostream>
-#include <strstream>
 #include <iomanip>
 #include <MNISTReader.h>
 #include <Layer.h>
@@ -29,6 +28,7 @@
 
 #define _USE_MATH_DEFINES
 #include <math.h>
+#include <fft2convo.h>
 
 #include <map>
 
@@ -424,12 +424,19 @@ LogPolarSupportMatrix PrecomputeLogPolarSupportMatrix(int in_rows, int in_cols, 
          double rr = -rd(c) * sin(a) + r_center;
          double cc =  rd(c) * cos(a) + c_center;
          //cout << p << "," << a << "," << x << "," << y << endl;
-         runtime_assert(rr >= 0.0 && cc >= 0.0);
+         if (rr < 0.0) { rr = 0.0; }
+         if (cc < 0.0) { cc = 0.0; }
+
+         if (rr > (in_rows - 1)) { rr = in_rows - 1; }
+         if (cc > (in_cols - 1)) { cc = in_cols - 1; }
+
+         //runtime_assert(rr >= 0.0 && cc >= 0.0);
 
          int rl = floor(rr);
          int rh = ceil(rr);
          int cl = floor(cc);
          int ch = ceil(cc);
+
          /*
          if (xl > 27) { cout << "xl: " << xl; xl = 27; }
          if (xh > 27) { cout << "xh: " << xh; xh = 27; }
@@ -3161,6 +3168,9 @@ void CompareLogPolar(string name1, string name2, string name_out)
 
    OMultiWeightsBMP oo(path, name_out);
    oo.Write(cr, 0);
+   OWeightsCSVFile ocsv(path, name_out);
+   ocsv.Write(cr, 0);
+
 }
 
 void Correlate(string name1, string name2, string name_out)
@@ -3173,10 +3183,26 @@ void Correlate(string name1, string name2, string name_out)
 
    Matrix cr(m1.rows(), m1.cols());
 
-   LinearCorrelate3(m1, m2, cr);
+   //LinearCorrelate3(m1, m2, cr);
+   
+   int cols = m1.cols();
+   int rows = m1.rows();
+   runtime_assert(rows == m2.rows() && cols == m2.cols());
 
+   Matrix m1p(rows, 2 * cols);
+   Matrix m2p(rows, 2 * cols);
+   m1p.setZero();
+   m2p.setZero();
+
+   m1p.block(0, 0, rows, cols) = m1;
+   m2p.block(0, 0, rows, cols) = m2;
+
+   fft2convolve(m1p, m2p, cr, -1);
+   
    OMultiWeightsBMP oo(path, name_out);
    oo.Write(cr, 0);
+   OWeightsCSVFile ocsv(path, name_out);
+   ocsv.Write(cr, 0);
 }
 
 //NOTE:

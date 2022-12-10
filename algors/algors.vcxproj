@@ -146,10 +146,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\bmp.cpp" />
+    <ClCompile Include="..\fft2convo.cpp" />
     <ClCompile Include="algors.cpp" />
     <ClCompile Include="fft1.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\fft2convo.h" />
     <ClInclude Include="..\fftn.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

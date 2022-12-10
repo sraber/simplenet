@@ -1191,7 +1191,7 @@ void rlft2(Doub *data, ColVector& speq,
 	//}
 	if (isign == -1) fourn(data,nn,2,isign);
 }
-
+/*
 void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign )
 {
    const int mrows = m.rows();
@@ -1358,6 +1358,7 @@ void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor )
       o = ow->block(sr, sc, orows, ocols);
    }
 }
+*/
 
 void fft2convo(Matrix& m, Matrix& h, Matrix& o)
 {

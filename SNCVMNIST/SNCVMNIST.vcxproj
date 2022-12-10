@@ -95,8 +95,8 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions);VC_EXTRALEAN;WIN32_LEAN_AND_MEAN;_SILENCE_CXX17_STRSTREAM_DEPRECATION_WARNING</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>c:\projects\eigen\eigen_3_37\Eigen;C:\projects\neuralnet\simplenet;C:\Projects\opencv411\opencv\build\include</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpp17</LanguageStandard>
-      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -131,8 +131,8 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions);VC_EXTRALEAN;WIN32_LEAN_AND_MEAN;_SILENCE_CXX17_STRSTREAM_DEPRECATION_WARNING</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>c:\projects\eigen\eigen_3_37\Eigen;C:\projects\neuralnet\simplenet;C:\Projects\opencv411\opencv\build\include</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpp17</LanguageStandard>
-      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -162,6 +162,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\bmp.cpp" />
+    <ClCompile Include="..\fft2convo.cpp" />
     <ClCompile Include="..\utility.cpp" />
     <ClCompile Include="SNCVMNIST.cpp" />
   </ItemGroup>

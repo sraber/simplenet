@@ -40,8 +40,6 @@ public:
    }
 };
 
-shared_ptr<iCallBackSink> MCB = make_shared<myCallBack>();
-
 void InitFCModel(bool restore)
 {
    model_name = "FC32";

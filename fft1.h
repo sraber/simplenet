@@ -1,4 +1,4 @@
-#pragma once _FFT1_H
+#pragma once
 
 int rfftsine(double * pdata, const int n, const int isign);
 int cfftsine( double * pdata, const int n, const int isign);
