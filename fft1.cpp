@@ -229,7 +229,7 @@ for (long p=0; p<m; p++, i+=2){
 void MakeRabinerChirp1( double* signal, long L, long n, int is )
 {
 double phi = PI/(double)(n);
-double k,t;  
+double t;  
 const long m = L >> 1;
 
 // REVIEW: Assert
@@ -282,10 +282,12 @@ void ChirpZ( double* s, long n, int is )
 int n2 = n >> 1;
 const int m = 2 * nearest_power_ceil(n+1);
 
-std::auto_ptr<double> t(new double[m]);
-std::auto_ptr<double> w(new double[m]);
-std::auto_ptr<double> dw(new double[m]);
-
+//std::auto_ptr<double> t(new double[m]);
+//std::auto_ptr<double> w(new double[m]);
+//std::auto_ptr<double> dw(new double[m]);
+std::unique_ptr<double> t(new double[m]);
+std::unique_ptr<double> w(new double[m]);
+std::unique_ptr<double> dw(new double[m]);
 double *p1, *p2;
 double *e1, *e2;
 

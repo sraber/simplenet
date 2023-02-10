@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <random>
 #include <functional>
+#include <chrono>
 
 using namespace std;
 
@@ -26,6 +27,10 @@ typedef  std::vector<ColVector> vector_of_colvector;
 typedef std::vector<iMatrix> vector_of_matrix_i;
 typedef std::vector<iColVector> vector_of_colvector_i;
 typedef std::vector<double> vector_of_number;
+
+// Note: Circular reference.  Layer uses fft2convo and fft2convo
+//       uses Matrix defiend here.
+#include <fft2convo.h>
 
 //--------- Error Handeling -------------------------------
 #define runtime_assert(expression) \
@@ -95,6 +100,19 @@ public:
    virtual RowVector LossGradient(void) = 0;
 };
 // ---------------------------------------------------------
+
+//----------- The Network layer interface ----
+
+class iLayer {
+public:
+   virtual ~iLayer() = 0 {};
+   virtual ColVector Eval(const ColVector& _x) = 0;
+   virtual RowVector BackProp(const RowVector& child_grad, bool want_backprop_grad = true) = 0;
+   virtual void Update(double eta) = 0;
+   virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
+};
+
+//-----------------------------------------------------------
 
 //----------- The Convolutional Network layer interface ----
 // The convolutional network requires an interface to abstract
@@ -218,8 +236,22 @@ public:
       }
    }
    void ReadFC(Matrix& w){
-      w.setRandom();
-      w *= Scale;
+      // No way to set the random seed in the Eigan implimintation so we get the same random values each run.
+      //w.setRandom();
+      //w *= Scale;
+      // The STL random number generator is seeded with clock time so we get a different random initialization
+      // each time.  Maybe that's good.. maybe that's bad :)
+      typedef std::chrono::high_resolution_clock myclock;
+      myclock::time_point beginning = myclock::now();
+      myclock::duration d = myclock::now() - beginning;
+      unsigned long seed = (unsigned long)d.count();
+      std::default_random_engine generator(seed);
+      std::normal_distribution<double> distribution(0.0, Scale);
+      for (int r = 0; r < w.rows(); r++) {
+         for (int c = 0; c < w.cols(); c++) {
+            w(r, c) = distribution(generator);
+         }
+      }
       if (BiasConstant) {
          w.rightCols(1).setConstant(Bias);
       }
@@ -635,7 +667,9 @@ public:
 };
 
 // Fully Connected Layer ----------------------------------------
-class Layer : public iStash {
+class Layer : 
+   public iLayer,
+   public iStash {
 public:
    int Count;
    int InputSize;
@@ -922,6 +956,17 @@ public:
 #endif
    }
 
+#ifdef FFT
+   void LinearConvolutionAccumulate(Matrix& m, Matrix& h, Matrix& out)
+   {
+      // -1 = correlate | 1 = convolution
+#ifdef CYCLIC
+      fft2convolve(m, h, out, 1, false, true, true);
+#else
+      fft2convolve(m, h, out, 1, true, true, true);
+#endif
+   }
+#else
    double MultiplyReverseBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
    {
       double sum = 0.0;
@@ -1000,7 +1045,21 @@ public:
          }
       }
    }
+#endif
 
+#ifdef FFT
+   void LinearCorrelate(Matrix& m, Matrix& h, Matrix& out, double bias = 0.0)
+   {
+#ifdef CYCLIC
+      fft2convolve(m, h, out, -1, false, true, false);
+#else
+      fft2convolve(m, h, out, -1, true, true, false);
+#endif
+      if (bias != 0.0) {
+         out.array() += bias;
+      }
+   }
+#else
    double MultiplyBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
    {
       double sum = 0.0;
@@ -1018,7 +1077,6 @@ public:
 
       return sum;
    }
-
    void LinearCorrelate( Matrix& m, Matrix& h, Matrix& out, double bias = 0.0 )
    {
       const int mrows = (int)m.rows();
@@ -1079,6 +1137,7 @@ public:
          }
       }
    }
+#endif
 
    inline void vecLinearCorrelate()
    {

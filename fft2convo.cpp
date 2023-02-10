@@ -5,38 +5,39 @@
 
 //--------------------------------
 
-// NOTE: See std::bit_floor( T x) implemented in C++20
-unsigned nearest_power_floor(unsigned x) {
-   if (std::_Is_pow_2(x)) {
-      return x;
+namespace fftn {
+   // NOTE: See std::bit_floor( T x) implemented in C++20
+   unsigned nearest_power_floor(unsigned x) {
+      if (std::_Is_pow_2(x)) {
+         return x;
+      }
+      int power = 1;
+      while (x >>= 1) power <<= 1;
+      return power;
    }
-   int power = 1;
-   while (x >>= 1) power <<= 1;
-   return power;
-}
 
-// NOTE: See std::bit_ceil( T x) implemented in C++20
-unsigned nearest_power_ceil(unsigned x) {
-   if (std::_Is_pow_2(x)) {
-      return x;
+   // NOTE: See std::bit_ceil( T x) implemented in C++20
+   unsigned nearest_power_ceil(unsigned x) {
+      if (std::_Is_pow_2(x)) {
+         return x;
+      }
+      if (x <= 1) return 1;
+      int power = 2;
+      x--;
+      while (x >>= 1) power <<= 1;
+      return power;
    }
-   if (x <= 1) return 1;
-   int power = 2;
-   x--;
-   while (x >>= 1) power <<= 1;
-   return power;
 }
-
 //---------------------------------
 
 void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign)
 {
-   const int mrows = m.rows();
-   const int mcols = m.cols();
-   const int hrows = h.rows();
-   const int hcols = h.cols();
-   const int orows = out.rows();
-   const int ocols = out.cols();
+   const int mrows = (int)m.rows();
+   const int mcols = (int)m.cols();
+   const int hrows = (int)h.rows();
+   const int hcols = (int)h.cols();
+   const int orows = (int)out.rows();
+   const int ocols = (int)out.cols();
 
    assert(_Is_pow_2(mrows));
    assert(_Is_pow_2(mcols));
@@ -108,14 +109,16 @@ void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign)
 #define pado 0x0004
 #define padall (padm | padh | pado)
 
-void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor)
+void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
+                  bool force_row_pad, bool force_col_pad,
+                  bool sum_into_output )
 {
-   const int mrows = m.rows();
-   const int mcols = m.cols();
-   const int hrows = h.rows();
-   const int hcols = h.cols();
-   const int orows = o.rows();
-   const int ocols = o.cols();
+   const int mrows = (int)m.rows();
+   const int mcols = (int)m.cols();
+   const int hrows = (int)h.rows();
+   const int hcols = (int)h.cols();
+   const int orows = (int)o.rows();
+   const int ocols = (int)o.cols();
 
    //const Matrix* mw = &m;
    //const Matrix* hw = &h;
@@ -124,13 +127,6 @@ void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor)
    Matrix pm;
    Matrix ph;
    Matrix po;
-
-   // This traslation is necessary to align the output with
-   // the linear (space based) algorithms.
-   // The problem is that a row and column are lost if this
-   // is done.
-   //Matrix t = h.block(0, 0, hrows - 1, hcols - 1);
-   //h.block(1, 1, hrows - 1, hcols - 1) = t;
 
    unsigned int pad = 0;
 
@@ -144,8 +140,18 @@ void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor)
    if (cols < hcols) { cols = hcols; }
    if (cols < ocols) { cols = ocols; }
 
-   if (!std::_Is_pow_2(rows)) { rows = nearest_power_ceil(rows); pad = padall; }
-   if (!std::_Is_pow_2(cols)) { cols = nearest_power_ceil(cols); pad = padall; }
+   if (std::_Is_pow_2(rows)) {
+      if (force_row_pad) { rows <<= 1; }
+   }
+   else{ 
+      rows = fftn::nearest_power_ceil(rows); pad = padall; 
+   }
+   if (std::_Is_pow_2(cols)) {
+      if (force_col_pad) { cols <<= 1; }
+   }
+   else{
+      cols = fftn::nearest_power_ceil(cols); pad = padall; 
+   }
 
    int cr = rows >> 1; cr--;
    int cc = cols >> 1; cc--;
@@ -192,8 +198,12 @@ void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor)
       int coc = ocols >> 1; if (!(ocols % 2)) { coc--; }
       int sr = cr - cor;
       int sc = cc - coc;
-
-      o = ow->block(sr, sc, orows, ocols);
+      if (sum_into_output) {
+         o += ow->block(sr, sc, orows, ocols);
+      }
+      else {
+         o = ow->block(sr, sc, orows, ocols);
+      }
    }
 }
 

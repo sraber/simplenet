@@ -4,6 +4,7 @@
 #include <layer.h>
 #include <bmp.h>
 
+void MakeMatrixRGBImage(string file, Matrix rm, Matrix gm, Matrix bm);
 void MakeMatrixImage(std::string file, Matrix m);
 void ScaleToOne(double* pdata, int size);
 

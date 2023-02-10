@@ -370,3 +370,4 @@ FodyWeavers.xsd
 /SelectSearch
 /SNCVMNIST/weights/LP1C4
 *.jpg
+/SNCVMNIST/weights/LP2/run notes.txt
