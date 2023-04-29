@@ -63,3 +63,47 @@ void ScaleToOne(double* pdata, int size)
       *pd = (*pd - min) / (max - min);
    }
 }
+
+void resize_image(const Matrix& input_image, const float scale_factor, Matrix& output_image)
+{
+   // Calculate the new image dimensions based on the scale factor
+   const int new_width = static_cast<int>(scale_factor * input_image.cols());
+   const int new_height = static_cast<int>(scale_factor * input_image.rows());
+
+   // Create a new output image matrix with the desired dimensions
+   output_image.resize(new_height, new_width);
+
+   // Use bilinear interpolation to scale the image
+   for (int y = 0; y < new_height; ++y)
+   {
+      for (int x = 0; x < new_width; ++x)
+      {
+         // Calculate the corresponding pixel position in the input image
+         const float input_x = static_cast<float>(x) / scale_factor;
+         const float input_y = static_cast<float>(y) / scale_factor;
+
+         // Compute the pixel values of the four nearest neighbors
+         const int x0 = static_cast<int>(input_x);
+         const int y0 = static_cast<int>(input_y);
+         const int x1 = std::min(x0 + 1, static_cast<int>(input_image.cols() - 1));
+         const int y1 = std::min(y0 + 1, static_cast<int>(input_image.rows() - 1));
+
+         const float p00 = input_image(y0, x0);
+         const float p01 = input_image(y0, x1);
+         const float p10 = input_image(y1, x0);
+         const float p11 = input_image(y1, x1);
+
+         // Compute the bilinear interpolation weights
+         const float weight_x1 = input_x - static_cast<float>(x0);
+         const float weight_x0 = 1.0f - weight_x1;
+         const float weight_y1 = input_y - static_cast<float>(y0);
+         const float weight_y0 = 1.0f - weight_y1;
+
+         // Compute the interpolated pixel value
+         const float interpolated_value = weight_x0 * (weight_y0 * p00 + weight_y1 * p10) + weight_x1 * (weight_y0 * p01 + weight_y1 * p11);
+
+         // Set the output pixel value
+         output_image(y, x) = interpolated_value;
+      }
+   }
+}

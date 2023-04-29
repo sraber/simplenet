@@ -29,7 +29,7 @@ typedef std::vector<iColVector> vector_of_colvector_i;
 typedef std::vector<double> vector_of_number;
 
 // Note: Circular reference.  Layer uses fft2convo and fft2convo
-//       uses Matrix defiend here.
+//       uses Matrix defined here.
 #include <fft2convo.h>
 
 //--------- Error Handeling -------------------------------
@@ -62,6 +62,21 @@ public:
    virtual ColVector Eval(Eigen::Map<ColVector>& x) = 0;
    virtual Matrix Jacobian(const ColVector& z) = 0;
    virtual int Length() = 0;
+};
+// -------------------------------------------------------
+// ----------- Optomizer interface -----------------------
+class iOptomizer {
+public:
+   virtual ~iOptomizer() = 0 {};
+   virtual void Resize(int rows, int cols, int channels = 1) = 0;
+   virtual void Backprop(Matrix& idW, int chn = 0) = 0;
+   virtual void BackpropBias(double idB, int chn = 0) = 0;
+   virtual Matrix& WeightGrad(int chn = 0) = 0;
+   virtual double BiasGrad(int chn = 0) = 0;
+   virtual void UpdateComplete() = 0;
+   virtual int BeginBackprop() = 0;
+   virtual void ResetCount() = 0;
+   virtual void Reinit() = 0;
 };
 // -------------------------------------------------------
 // ----------- Weight Matrix IO interfaces ---------------
@@ -195,6 +210,170 @@ typedef iCallBackSink::CallBackObj CBObj;
 
 //-----------------------------------------------------------
 
+//---------- Optomizer implementations ----------------------
+
+// Average Optomizer.
+// The gradient is the average gradient over the batch.
+class optoAverage : public iOptomizer {
+   vector_of_matrix dW;
+   vector_of_number dB;
+   int Count;
+public:
+   optoAverage() : Count(0){}
+   ~optoAverage() {}
+   void Resize(int rows, int cols, int channels) {
+      // dB is not used by FC Layer.
+      dB.resize(channels);
+      dW.resize(channels);
+      for (Matrix& m : dW) { m.resize(rows, cols); }
+   }
+   void Backprop(Matrix& idW, int chn) {
+      const double a = 1.0 / Count;
+      const double b = 1.0 - a;
+      dW[chn] = a * idW + b * dW[chn];
+   }
+   void BackpropBias(double idB, int chn) {
+      const double a = 1.0 / Count;
+      const double b = 1.0 - a;
+      dB[chn] = a * idB + b * dB[chn];
+   }
+   Matrix& WeightGrad(int chn) { return dW[chn]; }
+   double BiasGrad(int chn) { return dB[chn]; }
+   int BeginBackprop() { return ++Count; }
+   void ResetCount() { Count = 0; }
+   void UpdateComplete() { Count = 0; }
+   void Reinit() {}
+};
+
+// Low Pass Optomizer. (Like Momentum.)
+// The gradient is the average gradient over the batch.
+class optoLowPass : public iOptomizer {
+   vector_of_matrix dW;
+   vector_of_number dB;
+public:
+   static double Momentum;
+   // Momentum should before instantiation.  This is just a 
+   // way to make sure that we don't forget to set it.
+   optoLowPass() { runtime_assert( Momentum > 0.0) }
+   ~optoLowPass() {}
+   void Resize(int rows, int cols, int channels) {
+      // dB is not used by FC Layer.
+      dB.resize(channels);
+      for (double& b : dB) { b = 0.0; }
+      dW.resize(channels);
+      for (Matrix& m : dW) {
+         m.resize(rows, cols);
+         m.setZero();
+      }
+   }
+   void Backprop(Matrix& idW, int chn) {
+      double a = Momentum;  // Valid range 0 - 1
+      double b = 1.0 - a;
+      // NOTE: The b and a are swapped compared to the average equation above.
+      //       This can be confusing.
+      //       This is an implementation of a simple IIR low pass filter.
+      //dW = b * iter_w_grad + a * dW;
+      // Faster implementation (I think).
+      dW[chn] += b * (idW - dW[chn]);
+   }
+   void BackpropBias(double idB, int chn) {
+      const double a = 1.0 / Momentum;
+      const double b = 1.0 - a;
+      dB[chn] += b * (idB - dB[chn]);
+   }
+   Matrix& WeightGrad(int chn) { return dW[chn]; }
+   double BiasGrad(int chn) { return dB[chn]; }
+   int BeginBackprop() { return 0; }
+   void ResetCount() {}
+   void UpdateComplete() {}
+   void Reinit() {
+      for (double& b : dB) { b = 0.0; }
+      for (Matrix& m : dW) { m.setZero(); }
+   }
+};
+
+// ADAM Optomizer.
+// The gradient is the average gradient over the batch.
+class optoADAM : public iOptomizer {
+   vector_of_matrix T1;
+   vector_of_matrix T2;
+   vector_of_number N1;
+   vector_of_number N2;
+   Matrix H;
+   int Count;
+   int Rows;
+   int Cols;
+public:
+   static double B1;
+   static double B2;
+   // Momentum should before instantiation.  This is just a 
+   // way to make sure that we don't forget to set it.
+   optoADAM() : Count(0) { 
+      runtime_assert(B1 > 0.0)
+      runtime_assert(B2 > 0.0)
+   }
+   ~optoADAM() {}
+   void Resize(int rows, int cols, int channels) {
+      Rows = rows;
+      Cols = cols;
+
+      H.resize(rows, cols);
+
+      T1.resize(channels);
+      for (Matrix& m : T1) { m.resize(rows, cols); m.setZero(); }
+
+      T2.resize(channels);
+      for (Matrix& m : T2) { m.resize(rows, cols); m.setZero(); }
+
+      N1.resize(channels);
+      for (double& m : N1) { m = 0.0; }
+
+      N2.resize(channels);
+      for (double& m : N2) { m = 0.0; }
+   }
+   void Backprop(Matrix& idW, int chn) {
+      T1[chn] = B1 * T1[chn] + (1.0 - B1) * idW;
+      T2[chn].array() = B2 * T2[chn].array() + (1.0 - B2) * idW.array().square();
+   }
+   void BackpropBias(double idB, int chn) {
+      N1[chn] = B1 * N1[chn] + (1.0 - B1) * idB;
+      N2[chn] = B2 * N2[chn] + (1.0 - B2) * idB * idB;
+   }
+   Matrix& WeightGrad(int chn) { 
+      double b1 = 1.0 - std::pow(B1, Count);
+      double b2 = 1.0 - std::pow(B2, Count);
+
+      for (int r = 0; r < Rows; r++) {
+         for (int c = 0; c < Cols; c++) {
+            double h1 = T1[chn](r, c) / b1;
+            double h2 = T2[chn](r, c) / b2;
+            H(r, c) = h1 / (std::sqrt(h2) + 1.0e-8);
+         }
+      }
+
+      return H;
+   }
+   double BiasGrad(int chn) {
+      double b1 = 1.0 - std::pow(B1, Count);
+      double b2 = 1.0 - std::pow(B2, Count);
+      double h1 = N1[chn] / b1;
+      double h2 = N2[chn] / b2;
+      double h = h1 / (std::sqrt(h2) + 1.0e-8);
+      return h;
+   }
+   int BeginBackprop() { return ++Count; }
+   void ResetCount() { Count = 0; }
+   void UpdateComplete() {}
+   void Reinit() {
+      for (Matrix& m : T1) { m.setZero(); }
+      for (Matrix& m : T2) { m.setZero(); }
+      for (double& m : N1) { m = 0.0; }
+      for (double& m : N2) { m = 0.0; }
+   }
+};
+
+//-----------------------------------------------------------
+
 //---------- Weight initializer and output implementations -----
 
 class IWeightsToConstants : public iGetWeights {
@@ -215,6 +394,7 @@ public:
 };
 
 class IWeightsToRandom : public iGetWeights {
+
 public:
    double Scale;
    double Bias;
@@ -238,15 +418,8 @@ public:
    void ReadFC(Matrix& w){
       // No way to set the random seed in the Eigan implimintation so we get the same random values each run.
       //w.setRandom();
-      //w *= Scale;
-      // The STL random number generator is seeded with clock time so we get a different random initialization
-      // each time.  Maybe that's good.. maybe that's bad :)
-      typedef std::chrono::high_resolution_clock myclock;
-      myclock::time_point beginning = myclock::now();
-      myclock::duration d = myclock::now() - beginning;
-      unsigned long seed = (unsigned long)d.count();
-      std::default_random_engine generator(seed);
-      std::normal_distribution<double> distribution(0.0, Scale);
+      std::random_device rd;
+      std::default_random_engine generator(rd());      std::normal_distribution<double> distribution(0.0, Scale);
       for (int r = 0; r < w.rows(); r++) {
          for (int c = 0; c < w.cols(); c++) {
             w(r, c) = distribution(generator);
@@ -261,6 +434,7 @@ public:
 class IWeightsToNormDist : public iGetWeights {
    double StdDev;
    int Channels;
+
    /*
    Delving Deep into Rectifiers:
 Surpassing Human-Level Performance on ImageNet Classification
@@ -269,30 +443,34 @@ Surpassing Human-Level Performance on ImageNet Classification
       return sqrt( 2.0 / (r * c * (double)k) );
    };
    std::function<double(double, double, int)> stdv_Xavier = [](double r, double c, int k) {
-      return sqrt(6.0 / (r + c));
+      return sqrt( 2.0 / (r + c + k) );
    };
 
    std::function<double(double, double, int)> fstdv;
 public:
    enum InitType{
       Xavier,
-      Kanning
+      Kaiming
    };
    IWeightsToNormDist(double std_dev) : StdDev(std_dev), Channels(-1) {
       // Not used in this mode but we should init fstdv to something.
       fstdv = stdv_Xavier;
    }
+   // Xavier recommended for Tanh activation function.
+   // Kaiming recommended for ReLu and Sigmoid.
    IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0), Channels(channels) {
       switch(init_type) {
          case Xavier:      fstdv = stdv_Xavier; break;
-         case Kanning:     fstdv = stdv_Kaiming; break;
+         case Kaiming:     fstdv = stdv_Kaiming; break;
          default:          fstdv = stdv_Xavier;
       }
    }
    void ReadConvoWeight(Matrix& w, int k) {
       //double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)(w.rows() * w.cols())) :  StdDev;
       double stdv = StdDev < 0.0 ? fstdv((double)w.rows(),(double)w.cols(),Channels) :  StdDev;
-      std::default_random_engine generator;
+
+      std::random_device rd;
+      std::default_random_engine generator(rd());
       std::normal_distribution<double> distribution(0.0, stdv);
       for (int r = 0; r < w.rows(); r++) {
          for (int c = 0; c < w.cols(); c++) {
@@ -305,7 +483,8 @@ public:
    }
    void ReadFC(Matrix& w){
       double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.cols()) :  StdDev;
-      std::default_random_engine generator;
+      std::random_device rd;
+      std::default_random_engine generator(rd());
       std::normal_distribution<double> distribution(0.0, stdv);
       for (int r = 0; r < w.rows(); r++) {
          for (int c = 0; c < w.cols(); c++) {
@@ -671,14 +850,13 @@ class Layer :
    public iLayer,
    public iStash {
 public:
-   int Count;
    int InputSize;
    int OutputSize;
    ColVector X;
    ColVector Z;
    Matrix W;
    Matrix stash_W;
-   Matrix dW;
+   shared_ptr<iOptomizer> pOptomizer;
    unique_ptr<iActive> pActive;
    enum CallBackID { EvalPreActivation, EvalPostActivation, Backprop };
 private:
@@ -686,24 +864,21 @@ private:
    shared_ptr<iCallBackSink> EvalPostActivationCallBack;
    shared_ptr<iCallBackSink> BackpropCallBack;
 public:
-   Layer(int input_size, int output_size, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit ) :
+   Layer(int input_size, int output_size, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit, shared_ptr<iOptomizer> _pOptomizer = make_shared<optoAverage>()) :
       // Add an extra row to align with the bias weight.
       // This row should always be set to 1.
       X(input_size+1), 
       // Add an extra column for the bias weight.
       W(output_size, input_size+1),
-      dW(input_size+1, output_size ),
       pActive(move(_pActive)),
       InputSize(input_size),
       OutputSize(output_size),
-      Z(output_size)
+      Z(output_size),
+      pOptomizer(_pOptomizer)
    {
       pActive->Resize(output_size); 
-
+      pOptomizer->Resize(input_size + 1, output_size);
       _pInit->ReadFC(W);
-
-      dW.setZero();
-      Count = 0;
    }
 
    ~Layer() {}
@@ -715,8 +890,7 @@ public:
 
    void ApplyStash() {
       W = stash_W;
-      dW.setZero(); // Setting Count to zero effectivly zeros dW.  But needed if using momentum.
-      Count = 0;
+      pOptomizer->Reinit();
    }
 
    ColVector Eval(const ColVector& _x) {
@@ -730,7 +904,7 @@ public:
          props.insert({ "ID", CBObj(id) });
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
-         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
          props.insert({ "Z", CBObj(Z) });
          EvalPreActivationCallBack->Properties( props );
       }
@@ -745,7 +919,7 @@ public:
          props.insert({ "ID", CBObj(id) });
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
-         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
          props.insert({ "Z", CBObj(out) });
          EvalPostActivationCallBack->Properties( props );
          return out;
@@ -754,27 +928,12 @@ public:
    }
 
    RowVector BackProp(const RowVector& child_grad, bool want_layer_grad = true ) {
-      Count++;
+      pOptomizer->BeginBackprop();
       RowVector delta_grad = child_grad * pActive->Jacobian(Z);
       Matrix iter_w_grad = X * delta_grad;
 
-#ifdef MOMENTUM
-      // REVIEW: Momentum 
-      // iter_W_grad --> x (input)
-      // dW --> y(n-1)
-      double a = MOMENTUM;  // Valid range 0 - 1
-      double b = 1.0 - a;
-      // NOTE: The b and a are swapped from the equation above.
-      //       This can be confusing.
-      //       This is implementation of simple IIR low pass filter.
-      //dW = b * iter_w_grad + a * dW;
-      // Faster implementation (I think).
-      dW += b * (iter_w_grad - dW);
-#else
-      double a = 1.0 / (double)Count;
-      double b = 1.0 - a;
-      dW = a * iter_w_grad + b * dW;
-#endif
+      pOptomizer->Backprop(iter_w_grad);
+
       if (BackpropCallBack != nullptr) {
          map<string, CBObj> props;
          int id = Backprop;
@@ -782,7 +941,7 @@ public:
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
          props.insert({ "dG", CBObj(delta_grad) });
-         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
          props.insert({ "idW", CBObj(iter_w_grad) });
          props.insert({ "Z", CBObj(Z) });
          BackpropCallBack->Properties( props );
@@ -798,9 +957,8 @@ public:
    }
 
    void Update(double eta) {
-      Count = 0;
-      W = W - eta * dW.transpose();
-      //dW.setZero();  // Not strictly needed.
+      W = W - eta * pOptomizer->WeightGrad().transpose();
+      pOptomizer->UpdateComplete();
    }
 
    void Save(shared_ptr<iPutWeights> _pOut) {
@@ -818,13 +976,14 @@ public:
 
 class FilterLayer2D : 
    public iConvoLayer, 
-   public iStash {
+   public iStash 
+{
 public:
-   int Count;
+   int FilterChannels;
    Size InputSize;
    Size OutputSize;
    Size KernelSize;
-   int KernelPerChannel;
+   int OutputChannels;
    int Channels;
    // Vector of input matrix.  One per channel.
    vector_of_matrix X;
@@ -832,22 +991,23 @@ public:
    vector_of_matrix W;
    // Vector of kernel matrix stash.
    vector_of_matrix stash_W;
-   // Vector of kernel matrix gradients.  There are KernelPerChannel * input channels.
-   vector_of_matrix dW;
+   // The optomizer produces the final gradient to be applied to the decent method.
+   shared_ptr<iOptomizer> pOptomizer;
    // The bias vector.  One bias for each kernel.
    vector_of_number B;
    // The bias vector stash.
    vector_of_number stash_B;
    // The bias gradient vector.
    vector_of_number dB;
-   // Vector of activation complementary matrix.  There are KernelPerChannel * input channels.
+   // Vector of activation complementary matrix.  It is length of output channels and each
+   // Matrix is size output_size.
    // The values may be the convolution prior to activation or something else.  The activation
    // objects use the fly-weight pattern and this is the storage for that.
    vector_of_matrix Z;
+   vector_of_matrix Aux;
    unique_ptr<iActive> pActive;
    bool NoBias;
    enum CallBackID { EvalPreActivation, EvalPostActivation, Backprop1, Backprop2 };
-
 private:
    shared_ptr<iCallBackSink> EvalPreActivationCallBack;
    shared_ptr<iCallBackSink> EvalPostActivationCallBack;
@@ -855,27 +1015,34 @@ private:
 
 public:
 
-   FilterLayer2D(Size input_size, int input_channels, Size output_size, Size kernel_size, int kernel_number, unique_ptr<iActive> _pActive, shared_ptr<iGetWeights> _pInit, bool no_bias = false ) :
+   FilterLayer2D(Size input_size, int input_channels, Size output_size, Size kernel_size, int output_channels, unique_ptr<iActive> _pActive, 
+                  shared_ptr<iGetWeights> _pInit, shared_ptr<iOptomizer> _pOptomizer = make_shared<optoAverage>(), bool no_bias = false ) :
       X(input_channels), 
-      W(input_channels*kernel_number),
-      stash_W(input_channels*kernel_number),
-      B(input_channels*kernel_number),
-      stash_B(input_channels*kernel_number),
-      Z(input_channels*kernel_number),
-      dW(input_channels*kernel_number),
-      dB(input_channels*kernel_number),
+      FilterChannels(input_channels * output_channels),
+      W(FilterChannels),
+      // Aux is helper data for backprop.  It tells how to divide up
+      // the incomming error from the lower layer.
+      //Aux(FilterChannels),
+      stash_W(FilterChannels),
+      // There is one bias value for each (volumn) of filters.
+      B(output_channels),
+      stash_B(output_channels),
+      Z(output_channels),
       pActive(move(_pActive)),
       InputSize(input_size),
       OutputSize(output_size),
       KernelSize(kernel_size),
-      KernelPerChannel(kernel_number),
+      OutputChannels(output_channels),
+      // REVIEW: Rename to InputChannels.
       Channels(input_channels),
-      NoBias(no_bias)
+      NoBias(no_bias),
+      pOptomizer(_pOptomizer)
    {
       pActive->Resize(output_size.rows * output_size.cols); 
+      pOptomizer->Resize(kernel_size.rows, kernel_size.cols, FilterChannels);
 
       for (Matrix& m : X) { 
-         m.resize(input_size.rows, input_size.cols ); 
+         m.resize(input_size.rows, input_size.cols); 
          m.setZero();
       }
       for (int i = 0; i < W.size();i++) {
@@ -884,9 +1051,7 @@ public:
       }
 
       if (NoBias) {
-         for (double& b : B) {
-            b = 0.0;
-         }
+         for (double& b : B) { b = 0.0; }
       }
       else {
          Matrix temp(B.size(), 1);
@@ -899,16 +1064,8 @@ public:
          }
       }
 
-      for (double& db : dB) {
-         db = 0.0;
-      }
-      for (Matrix& m : dW) { 
-         m.resize(kernel_size.rows,kernel_size.cols); 
-         m.setZero();
-      }
-      for (Matrix& m : Z) { m.resize(output_size.rows,output_size.cols); }
-
-      Count = 0;
+      for (Matrix& m : Z) { m.resize(output_size.rows, output_size.cols); }
+      for (Matrix& m : Aux) { m.resize(output_size.rows, output_size.cols); }
    }
 
    ~FilterLayer2D() {}
@@ -945,15 +1102,8 @@ public:
       }
 
       B = stash_B;
-      //Setting Count to zero effectivly zeros dW.
-      Count = 0;
 
-      // Necessary when using momentum.
- #ifdef MOMENTUM
-      for (Matrix& m : dW) {
-         m.setZero();
-      }
-#endif
+      pOptomizer->Reinit();
    }
 
 #ifdef FFT
@@ -1139,23 +1289,6 @@ public:
    }
 #endif
 
-   inline void vecLinearCorrelate()
-   {
-      int chn = 0;
-      int count = 0;
-      vector_of_matrix::iterator iw = W.begin();
-      vector_of_matrix::iterator iz = Z.begin();
-      vector_of_number::iterator ib = B.begin();
-      for (; iw != W.end(); iw++, iz++, ib++) {
-         if (count == KernelPerChannel) {
-            count = 0;
-            chn++;
-         }
-         LinearCorrelate(X[chn], *iw, *iz, *ib);
-         count++;
-      }
-   }
-
    vector_of_matrix Eval(const vector_of_matrix& _x) 
    {
       vector_of_matrix::const_iterator is = _x.begin();
@@ -1165,7 +1298,58 @@ public:
          *it = *is;
       }
 
-      vecLinearCorrelate();
+      //**********************************
+      int chn = 0;
+      vector_of_matrix::iterator iw = W.begin();
+      vector_of_matrix::iterator iz = Z.begin();
+      //vector_of_matrix::iterator ia = Aux.begin();
+      vector_of_number::iterator ib = B.begin();
+      Matrix temp(OutputSize.rows, OutputSize.cols);
+
+      iz->setZero();
+
+      for (; iw != W.end(); iw++ ) {
+         if (chn == Channels) {
+            chn = 0;
+            iz++;
+            iz->setZero();
+         }
+         LinearCorrelate(X[chn], *iw, temp, 0.0);
+         *iz += temp;
+         chn++;
+      }
+
+      /*
+      iz = Z.begin();
+      chn = 0;
+      for (ia = Aux.begin(); ia != Aux.end(); ia++) {
+         if (chn == Channels) {
+            chn = 0;
+            iz++;
+         }
+         // Normalize each filter output channel by its sum z.
+         for (Eigen::Index r = 0; r < iz->rows(); r++) {
+            for (Eigen::Index c = 0; c < iz->cols(); c++) {
+               if ((*iz)(r, c) > 0.0) {
+                  (*ia)(r, c) /= (*iz)(r, c);
+               }
+            }
+         }
+         chn++;
+      }
+      */
+      if (!NoBias) {
+         ib = B.begin();
+         for (iz = Z.begin(); iz != Z.end(); iz++, ib++) {
+            if (*ib != 0.0) {
+               iz->array() += *ib;
+            }
+         }
+      }
+
+      //************************************
+
+
       vector_of_matrix vecOut(Z.size());
 
       if (EvalPreActivationCallBack != nullptr) {
@@ -1174,13 +1358,13 @@ public:
          props.insert({ "ID", CBObj(id) });
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
-         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
          props.insert({ "Z", CBObj(Z) });
          EvalPreActivationCallBack->Properties( props );
       }
 
       for (Matrix& mm : vecOut) { mm.resize(OutputSize.rows, OutputSize.cols); }
-      vector_of_matrix::iterator iz = Z.begin();
+      iz = Z.begin();
       vector_of_matrix::iterator io = vecOut.begin();
       for (; iz != Z.end(); ++iz, ++io) {
          // REVIEW: Checkout this link on Eigen sequences.
@@ -1196,7 +1380,7 @@ public:
          props.insert({ "ID", CBObj(id) });
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
-         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
          props.insert({ "Z", CBObj(vecOut) });
          EvalPostActivationCallBack->Properties( props );
       }
@@ -1204,37 +1388,68 @@ public:
       return vecOut;
    }
 
-   // Figure out how many output gradiens there are.  There will be the same or less out going 
-   // than in-comming.  Accumulate in-comming gradients into outgoing.
-   // There is input_channels*kernel_number in-comming.
-   // There are input_channels out-going.
+   //
+   // BackProp
+   // NOTES:
+   //    This method is passed the error gradients from the layer below this one.  It
+   //    will use gradents to compute update values (dW) for each of its filter (kernel)
+   //    matricies.  The optomizer determines how to apply the update values.  Next it
+   //    must compute the gradients that will be propagated to the layer above this one.
+   // Input:
+   //    child_grad  : An array of Matrix the size of OutputChannels with each Matrix having
+   //                  the dimention of OutputSize.
+   //    want_backprop_grad : It takes computing power to propagate the error matricies through
+   //                  this layer to the next.  If this is the top layer then the return
+   //                  value will go unused, so why compute it.  This flag lets us avoid that
+   //                  computation.
+   // Return:
+   //    A vector_of_matrix containing the backpropagation gradients of length InputChannels.
+   // 
+   // Error:
+   //    Proper input vector and matrix dimensions are checked for Debug compiles.
+   // 
    vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true ) 
    {
-      Count++;
+      // Initialize the optomizer.  The details are implementation dependant.
+      pOptomizer->BeginBackprop();
       // REVIEW: Notes need editing...
-      // child_grad will be a vector of input_channels*kernel_number.
+      // child_grad will be a vector of OutputChannels.
       // Each of those needs to be multiplied by Jacobian, 
       // then linear correlate X mat with layer_grad
       // then avg sum into dW vec mat.
       // propagate upstream 
       // layer_grad corr=> rotated kernel to size of InputSize
       // sum results according to kernels per channel.
-      const int incoming_channels =  KernelPerChannel * Channels;
+      const int incoming_channels =  OutputChannels;
       assert(child_grad.size() == incoming_channels);
 
-      // child_grad * Jacobian is stored in m_delta_grad.  The computation is made on
-      // a row vector map onto m_delta_grad.
+      // Pass the child_grad matricies through the Activation function.  This is done
+      // by multipling each Matrix by the Jacobian of the Activation function.  This is
+      // not matrix multiplication on the gradient matrix.  The Activation is applied
+      // to each element individually and so backprop is also applied to indvidual elements.
+      // This is done by 'vectorizing' the Matrix.  In this code the Eigen::Matrix is
+      // setup to be stored as row major so just taking the head of the data and
+      // calling it a RowVector will turn it into a RowMatirx.
+      // 
+      // Here we allocate the delta_grad and map a RowVector on it.
+      //
       Matrix m_delta_grad(OutputSize.rows, OutputSize.cols);
+      
+      Matrix m_chan_delta_grad(OutputSize.rows, OutputSize.cols);
+
+      // 
+      // child_grad * Jacobian is stored in m_delta_grad.  The computation is made on
+      // the RowVector map.
       Eigen::Map<RowVector> rv_delta_grad(m_delta_grad.data(), m_delta_grad.size());
 
-      // This layer gradient is stored in iter_w_grad.
+      // This layer's update gradient is stored in iter_dw.
       // It is computed by Correlation between the input matrix X
       // and the delta gradient (m_delta_grad).  Recall that this is 
       // because the derivitive of each of the kernel elements results in
       // this simplification.
       Matrix iter_dW(KernelSize.rows, KernelSize.cols);
 
-      // Allocate the vector of matrix for the return but only allocate
+      // Allocate the vector_of_matrix for the return but only allocate
       // the matricies if the caller wants them, else we'll return an empty vector.
       // We have to return something!
       vector_of_matrix vm_backprop_grad(Channels);
@@ -1247,58 +1462,71 @@ public:
          }
       }
 
-      int chn = 0;
-      int i = 0;
-      for (Matrix& mm : child_grad ) {
-         Eigen::Map<RowVector> rv_child_grad(mm.data(), mm.size());
-         Eigen::Map<ColVector> cv_z(Z[i].data(), Z[i].size());
+      // Each child_grad is passed through the Activation funciton
+      // Jacobian and is then applied to each channel of the filter
+      // volumn.  Each filter volumn is of depth InputChannels.
+
+
+      vector_of_matrix::iterator im = child_grad.begin();
+      vector_of_matrix::iterator iz = Z.begin();
+      //vector_of_matrix::iterator ia = Aux.begin();
+      int weight_matrix_count = 0;
+      int filter_count = 0;
+      for (; im != child_grad.end(); im++, iz++, filter_count++) {
+         Eigen::Map<RowVector> rv_child_grad(im->data(), im->size());
+         Eigen::Map<ColVector> cv_z(iz->data(), iz->size());
          rv_delta_grad = rv_child_grad * pActive->Jacobian(cv_z);
 
          // The bias gradient is the sum of the delta matrix.
          double iter_dB = 0.0;
-         if (!NoBias) { iter_dB = m_delta_grad.sum(); }
-
-         // Recall that rv_delta_grad is a vector map onto m_delta_grad.
-         LinearCorrelate(X[chn], m_delta_grad, iter_dW);
-
-         if (BackpropCallBack != nullptr) {
-            map<string, CBObj> props;
-            int id = Backprop1;
-            props.insert({ "ID", CBObj(id) });
-            props.insert({ "OC", CBObj(i) });  // Output Channel
-            props.insert({ "K", CBObj(chn) }); // Kernel
-            props.insert({ "dG", CBObj(m_delta_grad) });
-            props.insert({ "idW", CBObj(iter_dW) });
-            BackpropCallBack->Properties( props );
+         if (!NoBias) { 
+            iter_dB = m_delta_grad.sum(); 
+            pOptomizer->BackpropBias(iter_dB, filter_count);
          }
 
-#ifdef MOMENTUM
-         // REVIEW: Momentum 
-         // iter_W_grad --> x (input)
-         // dW --> y(n-1)
-         double a = MOMENTUM;  // Valid range 0 - 1
-         double b = 1.0 - a;
-         // NOTE: The b and a are swapped from the equation above.
-         //       This can be confusing.
-         //       This is implementation of simple IIR low pass filter.
-         //dW = b * iter_w_grad + a * dW;
-         // Faster implementation (I think).
-         dW[i] += b * (iter_dW - dW[i]);
-         if (!NoBias) { dB[i] += b * (iter_dB - dB[i]); }
-#else
-         // Average the result (iter_dW) into the Kernel gradient (dW).
-         double a = 1.0 / (double)Count;
-         double b = 1.0 - a;
-         dW[i] = a * iter_dW + b * dW[i];
-         if (!NoBias) { dB[i] = a * iter_dB + b * dB[i]; }
-#endif
+         //REVIEW: There are potentially multiple dW per input channel.  The aux matrix tells how to 
+         //        divide the incomming error matrix into them.
+         //         Nope.  It doesn't.
+         double div = 1.0 / (double)Channels;
+         for (int chn = 0; chn < Channels; chn++) {
+            // Each Aux matrix carries the fractional portion of the contribution
+            // that each filter matrix contributed to the Z matrix, which is a sum
+            // total of a filter kernel correlated with an input channel.
+            // Above is wrong.
+            // Just divide the gradent equally into each channel matrix.
+            m_chan_delta_grad = div * m_delta_grad;
 
-         if (want_backprop_grad) {
-            LinearConvolutionAccumulate(m_delta_grad, W[i], vm_backprop_grad[chn]);
+
+            //cout << X[chn] << endl << endl << m_chan_delta_grad << endl<< endl;
+
+            // Recall that rv_delta_grad is a vector map onto m_delta_grad.  Using
+            // this channel delta_grad compute the update gradients for the current 
+            // filter matrix iw.
+            LinearCorrelate(X[chn], m_chan_delta_grad, iter_dW);
+
+            //cout << iter_dW << endl << endl;
+
+            if (want_backprop_grad) {
+               LinearConvolutionAccumulate(m_chan_delta_grad, W[weight_matrix_count], vm_backprop_grad[chn]);
+            }
+
+            pOptomizer->Backprop(iter_dW, weight_matrix_count);
+
+            if (BackpropCallBack != nullptr) {
+               map<string, CBObj> props;
+               int id = Backprop1;
+               props.insert({ "ID", CBObj(id) });
+               props.insert({ "OC", CBObj(chn) });  // Output Channel
+               props.insert({ "K", CBObj(weight_matrix_count) }); // Kernel
+               props.insert({ "cdG", CBObj(*im) }); // Kernel
+               props.insert({ "dG", CBObj(m_delta_grad) });
+               props.insert({ "idW", CBObj(iter_dW) });
+               props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
+               BackpropCallBack->Properties( props );
+            }
+
+            weight_matrix_count++;
          }
-
-         if (  !( (i+1) % KernelPerChannel ) ){  chn++; }
-         i++;
       }
 
       if (BackpropCallBack != nullptr) {
@@ -1307,7 +1535,7 @@ public:
          props.insert({ "ID", CBObj(id) });
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
-         props.insert({ "dW", CBObj(dW) });
+         props.insert({ "odW", CBObj(vm_backprop_grad) });
          props.insert({ "Z", CBObj(Z) });
          BackpropCallBack->Properties( props );
       }
@@ -1316,19 +1544,15 @@ public:
    }
 
    void Update(double eta) {
-      Count = 0;
-      int maps = Channels * KernelPerChannel;
-      for (int i = 0; i < maps;i++) {
-         // REVIEW:  WARNING Will Robenson.. The "if" is for a special experiment!!!!!
-         //if (i > 3) {
-            W[i] = W[i] - eta * dW[i];
-         //}
-
-         if (!NoBias) {
-            B[i] = B[i] - eta * dB[i];
-            dB[i] = 0.0;
+      for (int i = 0; i < FilterChannels;i++) {
+         W[i] = W[i] - eta * pOptomizer->WeightGrad(i);
+      }
+      if (!NoBias) {
+         for (int i = 0; i < OutputChannels; i++) {
+            B[i] = B[i] - eta * pOptomizer->BiasGrad(i);
          }
       }
+      pOptomizer->UpdateComplete();
    }
 
    void Save(shared_ptr<iPutWeights> _pOut) {
@@ -2087,7 +2311,8 @@ public:
          // No reason to evaulate this expression if y[i]==0.0 .
          if (y[i] != 0.0) {
             //                        Prevent undefined results when taking the log of 0
-            loss -= y[i] * std::log( std::max(x[i], std::numeric_limits<Number>::epsilon()));
+            //double v = x[i] > std::numeric_limits<Number>::epsilon() ? x[i] : std::numeric_limits<Number>::epsilon();
+            loss -= y[i] * std::log( x[i] > std::numeric_limits<Number>::epsilon() ? x[i] : std::numeric_limits<Number>::epsilon() );
          }
       }
       return loss;

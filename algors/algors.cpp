@@ -1,6 +1,8 @@
 // algors.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 #include <Eigen>
+//#include <CXX11\\Tensor>
+//#include <CXX11\\ThreadPool>
 #include <iostream>
 #include <iomanip>
 #include <MNISTReader.h>
@@ -10,6 +12,7 @@
 #include <math.h>
 #include <amoeba.h>
 #include <random>
+#include <functional>
 
 #include <time.h>
 
@@ -24,7 +27,6 @@
 string path = "C:\\projects\\neuralnet\\simplenet\\algors\\results";
 
 void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign);
-void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor);
 
 void MakeMNISTImage(string file, Matrix m)
 {
@@ -299,6 +301,8 @@ double MultiplyBlock1( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int
    return sum;
 }
 
+// This is the version that gets used.  Because it is based on input
+// centers it requres no padding.
 void LinearCorrelate3( Matrix& m, Matrix& h, Matrix& out )
 {
    const int mrows = m.rows();
@@ -356,6 +360,42 @@ void LinearCorrelate3( Matrix& m, Matrix& h, Matrix& out )
             //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
             out(r, c) = MultiplyBlock(m, m1r, m1c, h, h1r, h1c, shr, shc);
          }
+      }
+   }
+}
+void LinearCorrelate1D(ColVector& m, ColVector& h, ColVector& out)
+{
+   const int mrows = m.rows();
+   const int hrows = h.rows();
+   const int orows = out.rows();
+   int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
+   int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
+   int or2 = orows >> 1; if (!(orows % 2)) { or2--; }
+
+   for (int r = 0; r < orows; r++) {     // Scan through the Correlation surface.
+      int h1r, h1c;
+      int m1r, m1c;
+      m1r = r + mr2 - or2 - hr2;
+
+      int shr = hrows;
+      if (m1r < 0) {
+         shr += m1r;
+         m1r = 0;
+         h1r = hrows - shr;
+      }
+      else {
+         h1r = 0;
+         shr = hrows;
+      }
+      if (m1r + shr > mrows) {
+         shr = mrows - m1r;
+      }
+
+      if (shr <= 0) {
+         out(r) = 0.0;
+      }
+      else {
+         out(r) = (m.array().block(m1r, 0, shr, 1) * h.array().block(h1r, 0, shr, 1)).sum();
       }
    }
 }
@@ -994,7 +1034,11 @@ void TestObjectDetection()
    //char c = cv::waitKey(0);
 }
 
-typedef void (*filter)(Matrix&, Matrix&, Matrix&);
+typedef function<void(Matrix&, Matrix&, Matrix&)> fn_filter;
+typedef function<void(Matrix&)> fn_mat_shape;
+
+typedef function<void(ColVector&, ColVector&, ColVector&)> fn_filter1D;
+typedef function<void(ColVector&)> fn_mat_shape1D;
 
 void TestEdgeDetect()
 {
@@ -1056,26 +1100,73 @@ void TestEdgeDetect()
       owf.close();
 }
 
-void TestFilterFunction( int sm, int sh, int so, string name, filter fn )
+
+void TestFilterFunction( int sm, int sh, int so, string name, fn_filter fn, fn_mat_shape shp1, fn_mat_shape shp2)
 {
-      Matrix m(sm, sm);  MakeCenterCircle(m, 5);
-      Matrix h(sh, sh);  MakeCenterCircle(h, 5);
-      Matrix o(so, so);  o.setZero();
+   Matrix m(sm, sm);  shp1(m);
+   Matrix h(sh, sh);  shp2(h);
+   Matrix o(so, so);  o.setZero();
 
-      //Rotate180(h);
-      fn(m, h, o);
+   //Rotate180(h);
+   fn(m, h, o);
 
-      ScaleToOne(o.data(), o.rows() * o.cols());
+   unsigned int mr = 0;
+   unsigned int mc = 0;
+   double max = 0.0;
+   for (int r = 0; r < so; r++) {
+      for (int c = 0; c < so; c++) {
+         if (max < o(r, c)) {
+            max = o(r, c);
+            mr = r;
+            mc = c;
+         }
+      }
+   }
 
-      MakeMatrixImage(path + "\\" + name + ".bmp", o);
+   cout << "max row: " << mr << " col:" << mc << endl;
 
-      ofstream owf(path +  "\\" + name + ".csv", ios::trunc);
+   // octave file format
+   ofstream owf(path +  "\\" + name + ".csv", ios::trunc);
+   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+   owf << o.format(OctaveFmt);
+   owf.close();
 
-      // octave file format
-      const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
-      owf << o.format(OctaveFmt);
-      owf.close();
+   ScaleToOne(o.data(), o.rows() * o.cols());
+   MakeMatrixImage(path + "\\" + name + ".bmp", o);
 }
+
+void TestFilterFunction1D(int sm, int sh, int so, string name, fn_filter1D fn, fn_mat_shape1D shp1, fn_mat_shape1D shp2)
+{
+
+
+   ColVector m(sm);  shp1(m);
+   ColVector h(sh);  shp2(h);
+   ColVector o(so);  o.setZero();
+
+   fn(m, h, o);
+
+   ScaleToOne(o.data(), o.rows() * o.cols());
+
+   ofstream owf(path + "\\" + name + ".csv", ios::trunc);
+
+   unsigned int mr = 0;
+   double max = 0.0;
+   for (int r = 0; r < so; r++) {
+      if (max < o(r)) {
+         max = o(r);
+         mr = r;
+      }
+   }
+
+   cout << "max row: " << mr << endl;
+
+   // octave file format
+   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+   owf << o.format(OctaveFmt);
+   owf.close();
+}
+
+
 
 double sqr(ColVector p)
 {
@@ -1192,22 +1283,391 @@ void rlft2(Doub *data, ColVector& speq,
 	if (isign == -1) fourn(data,nn,2,isign);
 }
 
-void fft2convo(Matrix& m, Matrix& h, Matrix& o)
+
+void TestFilterFunctionDriver(int sm, int sh, int so, fn_filter fn, fn_mat_shape shp1, fn_mat_shape shp2)
 {
-   fft2convolve(m, h, o, 1);
+   char buf[255];
+   std::snprintf(buf, 255, "fc_%d_%d_%d", sm, sh, so);
+   cout << "FFT Filter" << endl;
+   TestFilterFunction(sm, sh, so, buf, fn, shp1, shp2 );
+   cout << endl << "Linear Filter" << endl;
+   std::snprintf(buf, 255, "lc_%d_%d_%d", sm, sh, so);
+   TestFilterFunction(sm, sh, so, buf, LinearCorrelate3, shp1, shp2);
+   cout << endl;
+}
+
+void TestFilter1Driver(int sm, int sh, int so, fn_filter1D fn, fn_mat_shape1D shp1, fn_mat_shape1D shp2)
+{
+   char buf[255];
+   std::snprintf(buf, 255, "fc1D_%d_%d_%d", sm, sh, so);
+   cout << "FFT Filter" << endl;
+   TestFilterFunction1D(sm, sh, so, buf, fn, shp1, shp2);
+   cout << endl << "Linear Filter" << endl;
+   std::snprintf(buf, 255, "lc1D_%d_%d_%d", sm, sh, so);
+   TestFilterFunction1D(sm, sh, so, buf, LinearCorrelate1D, shp1, shp2);
+   cout << endl;
+}
+
+void ShiftExperiment()
+{
+   auto gauss2d = [](Matrix& m, double sigma, int rc, int cc) {
+      const unsigned int rows = m.rows();
+      const unsigned int cols = m.cols();
+      for (int r = 0; r < rows; r++) {
+         for (int c = 0; c < cols; c++) {
+            double e = (std::pow(r - rc, 2.0) + std::pow(c - cc, 2.0)) / (2.0 * sigma);
+            m(r, c) = std::exp(-e);
+         }
+      }
+   };
+
+   auto square = [](Matrix& m, double sigma, int rc, int cc) {
+      const unsigned int rows = m.rows();
+      const unsigned int cols = m.cols();
+      for (int r = 0; r < rows; r++) {
+         for (int c = 0; c < cols; c++) {
+            if (std::abs(r - rc) <= sigma && std::abs(c - cc) <= sigma) {
+               m(r, c) = 1.0;
+            }
+            else {
+               m(r, c) = 0.0;
+            }
+         }
+      }
+   };
+
+   const double DX = 3.0;
+   const double DY = 5.0;
+
+   const unsigned int R = 64;
+   const unsigned int C = 64;
+
+   Matrix m(R, C);
+   Matrix mn(R,2);
+   //gauss2d(m, 8.0, 31, 31);
+   square(m, 8.0, 31, 31);
+
+   ofstream owf(path + "\\gauss.csv", ios::trunc);
+   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+   owf << m.format(OctaveFmt);
+   owf.close();
+
+   // rlft3 must be given a row-major matrix.
+   runtime_assert(Eigen::MatrixBase<decltype(m)>::IsRowMajor );
+   rlft3(m.data(), mn.data(), 1, R, C, 1);
+
+   double fac = 2.0 / (R * C);
+
+   const unsigned int C2 = C >> 1;
+
+   Matrix real(R, C2);
+   Matrix imag(R, C2);
+   Matrix m_real(R, C2 + 1);
+   Matrix m_imag(R, C2 + 1);
+
+   // There are +- R/2 frequencies.
+
+   // There are zero to ocols frequencies in the column direction
+   // so we can simply use c.
+
+   double* pdat = m.data();
+   for (unsigned int r = 0; r < R; r++) {
+      for (unsigned int c = 0; c < C2; c++) {
+         unsigned int cc = c << 1;
+         double a = m(r, cc);
+         double b = m(r, cc + 1);
+
+         // So, the result is stored in row-major.  This is complex pairs stored
+         // in row-major order.  So that means that the resultant matrix is 64 (in this example)
+         // wide or C wide.  The columns are associated with the real valued first FFT and is
+         // 32 or C/2 complex pairs, thus the origional C wide, however it is indexed in steps of 2
+         // since the complex pairs are lined up in the row.
+         // There are simply R rows containing the full positive and negitive spectrum, but since
+         // the complex pairs are across the row (spans 2 columns) there are simply R rows.
+         // So the shape of the matrix turns out to be the origional R x C.
+
+
+         //unsigned int i = r * 2 * ocols + 2 * c;
+         //double a = pdat[i];
+         //double b = pdat[i+1];
+         m_real(r, c) = a;
+         m_imag(r, c) = b;
+
+         double o = fac * a;
+         double p = fac * b;
+         // The shift terms.
+         double e = cos(-2.0 * EIGEN_PI * (DX * (double)r / (double)R + DY * (double)c / (double)C));
+         double f = sin(-2.0 * EIGEN_PI * (DX * (double)r / (double)R + DY * (double)c / (double)C));
+
+         m(r, cc)     = e * o + f * p;
+         m(r, cc + 1) = e * p - f * o;
+
+         real(r, c) = e;
+         imag(r, c) = -f;
+      }
+   }
+
+   cout << "\n" << mn.maxCoeff() << endl;
+
+   for (unsigned int r = 0; r < R; r++) {
+      // Introduce a shift in the result of -sign.
+      //
+      double o = fac * mn(r, 0);
+      double p = fac * mn(r, 1);
+
+      m_real(r, C2) = mn(r, 0);
+      m_imag(r, C2) = mn(r, 1);
+
+      // The shift terms.
+      double e = cos(-2.0 * EIGEN_PI * (DX * (double)r / (double)R + DY * 0.5 ));
+      double f = sin(-2.0 * EIGEN_PI * (DX * (double)r / (double)R + DY * 0.5 ));
+
+      // Compute modified result.
+      mn(r, 0) = e * o + f * p;
+      mn(r, 1) = e * p - f * o;
+   }
+
+   rlft3(m.data(), mn.data(), 1, R, C, -1);
+
+   owf.open(path + "\\gaussout.csv", ios::trunc);
+   owf << m.format(OctaveFmt);
+   owf.close();
+
+   owf.open(path + "\\greal.csv", ios::trunc);
+   owf << m_real.format(OctaveFmt);
+   owf.close();
+
+   owf.open(path + "\\gimag.csv", ios::trunc);
+   owf << m_imag.format(OctaveFmt);
+   owf.close();
+
+   owf.open(path + "\\real.csv", ios::trunc);
+   owf << real.format(OctaveFmt);
+   owf.close();
+
+   owf.open(path + "\\imag.csv", ios::trunc);
+   owf << imag.format(OctaveFmt);
+   owf.close();
+}
+/*
+#include <vector>
+#include <thread>
+#include <functional>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <future>
+
+class ThreadPool {
+public:
+   ThreadPool(size_t num_threads) {
+      // Create worker threads and start them
+      for (size_t i = 0; i < num_threads; ++i) {
+         workers.emplace_back([this] {
+            while (true) {
+               // Get the next task from the queue
+               std::function<void()> task;
+               {
+                  std::unique_lock<std::mutex> lock(queue_mutex);
+                  condition.wait(lock, [this] {
+                     return stop || !tasks.empty();
+                     });
+                  if (stop && tasks.empty()) {
+                     // Stop requested and no more tasks, so exit the thread
+                     return;
+                  }
+                  task = std::move(tasks.front());
+                  tasks.pop();
+               }
+               // Execute the task
+               task();
+            }
+            });
+      }
+   }
+
+   ~ThreadPool() {
+      // Request stop and notify all threads to wake up
+      {
+         std::unique_lock<std::mutex> lock(queue_mutex);
+         stop = true;
+      }
+      condition.notify_all();
+      // Join all threads
+      for (auto& worker : workers) {
+         worker.join();
+      }
+   }
+
+   // ParallelFor method that executes a function in parallel for a given index range
+   template<typename Func>
+   void ParallelFor(int start_index, int end_index, Func func) {
+      // Divide the range into chunks based on the number of threads
+      int chunk_size = (end_index - start_index + 1) / workers.size();
+      if (chunk_size < 1) {
+         chunk_size = 1;
+      }
+      // Add tasks to the queue for each chunk
+      std::vector<std::future<void>> futures;
+      for (int i = start_index; i <= end_index; i += chunk_size) {
+         int chunk_end = std::min(i + chunk_size - 1, end_index);
+         futures.emplace_back(std::async(std::launch::async, [i, chunk_end, func] {
+            for (int j = i; j <= chunk_end; ++j) {
+               func(j);
+            }
+            }));
+      }
+      // Wait for all tasks to complete
+      for (auto& future : futures) {
+         future.wait();
+      }
+   }
+
+private:
+   std::vector<std::thread> workers;
+   std::queue<std::function<void()>> tasks;
+   std::mutex queue_mutex;
+   std::condition_variable condition;
+   bool stop = false;
+};
+*/
+
+void FastMath()
+{
+   ColVector z(1000);
+   ColVector x(1000);
+   Matrix m(1000, 1000);
+
+   char c;
+   cout << "Ready? Hit a key." << endl;
+   cin >> c;
+
+   x.setConstant(1);
+   m.setZero();
+   for (int i = 0; i < 100; i++) {
+      m(i, i) = i;
+   }
+
+   //Eigen::ThreadPool pool(4);
+   //Eigen::ThreadPoolDevice dev(&pool, 4);
+
+   auto start_time = std::chrono::high_resolution_clock::now();
+
+   //Eigen::TensorOpCost toc = Eigen::TensorOpCost(m.size(), m.size(), m.size());
+  // dev.parallelFor(m.rows(), toc, [&](Eigen::Index a, Eigen::Index b) {
+      //cout << a << "," << b << endl;
+      //z.block(a, 0, b - a, 1) = m.block(a, 0, b - a, m.cols()) * x;
+      //for (int i = a; i < b; i++) {
+      //   z(i) = m.row(i) * x;
+      //}
+//      });
+
+   cout << Eigen::nbThreads() << endl;
+
+   for (int i = 0; i < 10; i++) {
+      z = m * x;
+   }
+
+   auto end_time = std::chrono::high_resolution_clock::now();
+   auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+   std::cout << "Duration: " << duration_ms.count() << " ms" << std::endl;
+
+   cout << z.block(0,0,10,1) << endl;
+
+   // Use the thread pool to parallelize the multiplication
+   //pool.(0, matrix.rows(), [&](int i) {
+   //   result(i) = (matrix.row(i) * colVector)(0);
+   //   });
+
+
 }
 
 int main()
 
 {
     std::cout << "Algorithm Tester!\n";
+
+    //ShiftExperiment();
+    //return 1;
+
     //TestKernelFlipper1();
     //TestKernelFlipper2();
-    //TestObjectDetection();\
+    //TestObjectDetection();
     //TestEdgeDetect();
 
-    TestFilterFunction(31, 11, 31, "fc_31_11_31",fft2convo);
-    TestFilterFunction(31, 11, 31, "lc_31_11_31",LinearConvolution3);
+    /*
+    Matrix m(32,32);
+    m.setZero();
+    m(15, 15) = 1.0;
+
+    unsigned int rows = 64;
+    unsigned int cols = 64;
+    unsigned int mrows = 32;
+    unsigned int mcols = 32;
+    // Copy the m matrix to temporary matrix pm.
+    Matrix pm(rows, cols);
+    unsigned int sr = rows - mrows; sr >>= 1;
+    unsigned int sc = cols - mcols; sc >>= 1;
+    pm.setZero();
+    pm.block(sr, sc, mrows, mcols) = m;
+
+    unsigned int mr = 0;
+    unsigned int mc = 0;
+    double max = 0.0;
+    for (int r = 0; r < rows; r++) {
+       for (int c = 0; c < cols; c++) {
+          if (max < pm(r, c)) {
+             max = pm(r, c);
+             mr = r;
+             mc = c;
+          }
+       }
+    }
+    cout << "max row: " << mr << " col:" << mc << endl;
+    */
+
+    FastMath();
+
+/*
+    auto fft2filter = [](Matrix& m, Matrix& h, Matrix& o) { fft2convolve(m, h, o, -1, true, true); };
+
+
+    auto shp = [](Matrix& m) { MakeCenterCircle(m, 5); };
+    auto shp_pt = [](Matrix& m) { m.setZero(); m(15, 15) = 1.0; };
+    auto shp_edg = [](Matrix& m) { 
+       m.setZero(); 
+       m.col(4).setConstant(1.0); 
+       m(0, 4) = 0;
+       m(1, 4) = 0;
+       m(30,4) = 0;
+       m(31,4) = 0;
+    };
+    fftn::filter_correlation = true;
+    TestFilterFunctionDriver(32, 32, 32, fft2filter, shp_edg, shp_pt);
+
+    auto fft1filter = [](ColVector& m, ColVector& h, ColVector& o) { fft1convolve(m, h, o, -1, true); };
+
+
+    auto MakeCenterPatch = [](ColVector& m )
+    {
+       const double rad = 5;
+       int n = m.size();
+       int n2 = n >> 1; if (!(n % 2)) { n2--; }
+       m.setConstant(0.0);
+       for (int j = 0; j < n; j++) {
+          int x = n2 - j;
+          double r = sqrt(x * x);
+          m(j) = r < rad ? 1.0 : 0.0;
+       }
+    };
+    auto shp_pt1 = [](ColVector& m) { m.setZero(); m(15) = 1.0; };
+    auto shp_edg1 = [](ColVector& m) { m.setZero(); m(0) = 1.0; };
+*/
+    //TestFilter1Driver(31, 10, 9, fft1filter, MakeCenterPatch, MakeCenterPatch);
+
+    char c;
+    cout << "hit a key and press Enter";
+    cin >> c;
 
     //REVIEW:
     // The test image was tainting the comparisons.  Fixed the test image

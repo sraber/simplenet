@@ -164,6 +164,7 @@
     <ClCompile Include="..\bmp.cpp" />
     <ClCompile Include="..\fft1.cpp" />
     <ClCompile Include="..\fft2convo.cpp" />
+    <ClCompile Include="..\fftn.cpp" />
     <ClCompile Include="..\utility.cpp" />
     <ClCompile Include="SNCVMNIST.cpp" />
   </ItemGroup>

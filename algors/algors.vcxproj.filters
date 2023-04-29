@@ -27,12 +27,21 @@
     <ClCompile Include="..\fft2convo.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\fftn.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\fft1convo.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\fftn.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\fft2convo.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\fft1.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

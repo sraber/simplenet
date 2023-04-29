@@ -1,12 +1,13 @@
 #include <Eigen>
 #include <Layer.h>
 #include <fftn.h>
-#include <fft1.h>
+
+
 
 //--------------------------------
-
+// REVIEW: It all should be in a namespace.
 namespace fftn {
-   // NOTE: See std::bit_floor( T x) implemented in C++20
+// NOTE: See std::bit_floor( T x) implemented in C++20
    unsigned nearest_power_floor(unsigned x) {
       if (std::_Is_pow_2(x)) {
          return x;
@@ -32,65 +33,102 @@ namespace fftn {
 
 void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign)
 {
-   const int mrows = (int)m.rows();
-   const int mcols = (int)m.cols();
-   const int hrows = (int)h.rows();
-   const int hcols = (int)h.cols();
-   const int orows = (int)out.rows();
-   const int ocols = (int)out.cols();
+   runtime_assert(sign == 1 || sign == -1);
 
-   assert(_Is_pow_2(mrows));
-   assert(_Is_pow_2(mcols));
-   assert(mrows == hrows);
-   assert(mcols == hcols);
-   assert(mrows == orows);
-   assert(mcols == ocols);
+   const unsigned int mrows = (int)m.rows();
+   const unsigned int mcols = (int)m.cols();
+   const unsigned int hrows = (int)h.rows();
+   const unsigned int hcols = (int)h.cols();
+   const unsigned int orows = (int)out.rows();
+   const unsigned int ocols = (int)out.cols();
 
-   const int rows = mrows;
-   const int cols = mcols;
+   // The inputs and ouput must all be a power of 2.  The
+   // rows and columns don't need to be the same but must be
+   // a power of 2.
+   // The inputs and output must all be the same dimensions.
+   runtime_assert(_Is_pow_2(mrows));
+   runtime_assert(_Is_pow_2(mcols));
+   runtime_assert(mrows == hrows);
+   runtime_assert(mcols == hcols);
+   runtime_assert(mrows == orows);
+   runtime_assert(mcols == ocols);
 
-   ColVector mnqrow(2 * cols);
-   ColVector hnqrow(2 * cols);
-   ColVector onqrow(2 * cols);
+   const unsigned int rows = mrows;
+   const unsigned int cols = mcols;
+   const unsigned int cols2 = cols >> 1;
+
+   const double DX = -1.0;
+   const double DY = -1.0;
+
+   // These vectors hold the coefficient of the Nyquist Frequency
+   // for each row.  As said in NR, this algorithm is an "almost"
+   // in-place transform and the vectors below provide the additional
+   // storage space required.  In this algorithm we are utilizing a 2D
+   // FFT and the additional storage is a vector for each input and the
+   // resulting output.  If it were a 3D trasform the additional storage
+   // would be a plane (Matrix).
+   // It is 2 * cols to make room for the complex pairs.
+   Matrix mnqrow(rows,2);
+   Matrix hnqrow(rows,2);
+   Matrix onqrow(rows,2);
 
    rlft3(m.data(), mnqrow.data(), 1, rows, cols, 1);
    rlft3(h.data(), hnqrow.data(), 1, rows, cols, 1);
 
    double fac = 2.0 / (rows * cols);
 
-   const int OROWS = rows >> 1;
-   const int OCOLS = cols << 1;
+   for (unsigned int row = 0; row < rows; row++) {
+      for (unsigned int col = 0; col < cols2; col ++) {
+         unsigned int cc = col << 1;
+         double a = m(row, cc);
+         double b = m(row, cc + 1);
+         double c = h(row, cc);
+         double d = sign * h(row, cc + 1); // Conjugate
 
-   Eigen::Map<Matrix> mo(m.data(), OROWS, OCOLS);
-   Eigen::Map<Matrix> ho(h.data(), OROWS, OCOLS);
-   Eigen::Map<Matrix> oo(out.data(), OROWS, OCOLS);
+         // Introduce a shift in the result of -sign (built into the value of w).
+         //
+         double o = fac * (a * c - d * b);
+         double p = fac * (c * b + a * d);
 
-   for (int row = 0; row < OROWS; row++) {
-      for (int col = 0; col < OCOLS; col += 2) {
-         double a = mo(row, col);
-         double b = mo(row, col + 1);
-         double c = ho(row, col);
-         double d = sign * ho(row, col + 1); // Conjugate
+         // The shift terms.
+         double e = cos(sign * 2.0 * EIGEN_PI * (DX * (double)row / (double)rows + DY * (double)col / (double)cols));
+         double f = sin(sign * 2.0 * EIGEN_PI * (DX * (double)row / (double)rows + DY * (double)col / (double)cols));
 
-         oo(row, col) = fac * (a * c - d * b);
-         oo(row, col + 1) = fac * (c * b + a * d);
+         // Compute modified result.
+         out(row, cc) = e * o + f * p;
+         out(row, cc + 1) = e * p - f * o;
       }
    }
 
-   for (int col = 0; col < OCOLS; col += 2) {
-      double a = mnqrow(col);
-      double b = mnqrow(col + 1);
-      double c = hnqrow(col);
-      double d = sign * hnqrow(col + 1);  // Conjugate
+   for (unsigned int row = 0; row < rows; row++) {
+      double a = mnqrow(row, 0);
+      double b = mnqrow(row, 1);
+      double c = hnqrow(row, 0);
+      double d = sign * hnqrow(row, 1);  // Conjugate
 
-      onqrow(col) = fac * (a * c - d * b);
-      onqrow(col + 1) = fac * (c * b + a * d);
+
+      double o = fac * (a * c - d * b);
+      double p = fac * (c * b + a * d);
+
+      // Introduce a shift in the result of sign.
+      double e = cos(sign * 2.0 * EIGEN_PI * (DX * (double)row / (double)rows + DY * 0.5));
+      double f = sin(sign * 2.0 * EIGEN_PI * (DX * (double)row / (double)rows + DY * 0.5));
+
+      // Compute modified result.
+      onqrow(row, 0) = e * o + f * p;
+      onqrow(row, 1) = e * p - f * o;
    }
 
+   // Transform back to time/spacial domain.
    rlft3(out.data(), onqrow.data(), 1, rows, cols, -1);
 
-   int or2 = orows >> 1;
-   int oc2 = ocols >> 1;
+   // REVIEW: This shift is mearly a convenience.  If the downstream
+   //         code were adjusted to utilize the result in it's natural
+   //         state this overhead could be avoided.
+
+   // Used for the FFT shift.
+   unsigned int or2 = orows >> 1;
+   unsigned int oc2 = ocols >> 1;
 
    // This is FFT shift.
    Matrix t(or2, oc2);
@@ -103,39 +141,29 @@ void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign)
    out.block(0, oc2, or2, oc2) = t;
 }
 
-
-#define padm 0x0001
-#define padh 0x0002
-#define pado 0x0004
-#define padall (padm | padh | pado)
-
-void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
+// REVIEW: 1) Hate the name.
+//         2) force pad isn't enough.  Minimum pad is a better way to go.
+void fft2convolve( const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
                   bool force_row_pad, bool force_col_pad,
                   bool sum_into_output )
 {
-   const int mrows = (int)m.rows();
-   const int mcols = (int)m.cols();
-   const int hrows = (int)h.rows();
-   const int hcols = (int)h.cols();
-   const int orows = (int)o.rows();
-   const int ocols = (int)o.cols();
+   const unsigned int mrows = (unsigned int)m.rows();
+   const unsigned int mcols = (unsigned int)m.cols();
+   const unsigned int hrows = (unsigned int)h.rows();
+   const unsigned int hcols = (unsigned int)h.cols();
+   const unsigned int orows = (unsigned int)o.rows();
+   const unsigned int ocols = (unsigned int)o.cols();
 
-   //const Matrix* mw = &m;
-   //const Matrix* hw = &h;
    Matrix* ow = &o;
 
-   Matrix pm;
-   Matrix ph;
    Matrix po;
 
-   unsigned int pad = 0;
-
-   int rows = 0;
+   int unsigned rows = 0;
    if (rows < mrows) { rows = mrows; }
    if (rows < hrows) { rows = hrows; }
    if (rows < orows) { rows = orows; }
 
-   int cols = 0;
+   int unsigned cols = 0;
    if (cols < mcols) { cols = mcols; }
    if (cols < hcols) { cols = hcols; }
    if (cols < ocols) { cols = ocols; }
@@ -144,60 +172,49 @@ void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
       if (force_row_pad) { rows <<= 1; }
    }
    else{ 
-      rows = fftn::nearest_power_ceil(rows); pad = padall; 
+      rows = fftn::nearest_power_ceil(rows);
    }
    if (std::_Is_pow_2(cols)) {
       if (force_col_pad) { cols <<= 1; }
    }
    else{
-      cols = fftn::nearest_power_ceil(cols); pad = padall; 
+      cols = fftn::nearest_power_ceil(cols);
    }
 
-   int cr = rows >> 1; cr--;
-   int cc = cols >> 1; cc--;
+   // The FFT is done in-place and this function is designed to
+   // preserve the value of the input matricies so we must make
+   // a copy of them.  The copy may be padded.
 
-   //if (mrows != rows || mcols != cols) {
-   pad |= padm;
-   pm.resize(rows, cols);
-
-   int cmr = mrows >> 1; if (!(mrows % 2)) { cmr--; }
-   int cmc = mcols >> 1; if (!(mcols % 2)) { cmc--; }
-   int sr = cr - cmr;
-   int sc = cc - cmc;
-
+   // Copy the m matrix to temporary matrix pm.
+   Matrix pm(rows, cols);
+   unsigned int sr = rows - mrows; sr >>= 1;
+   unsigned int sc = cols - mcols; sc >>= 1;
    pm.setZero();
    pm.block(sr, sc, mrows, mcols) = m;
-   //mw = &pm;
-//}
-//if (hrows != rows || hcols != cols) {
-   pad |= padh;
-   ph.resize(rows, cols);
 
-   int chr = hrows >> 1; if (!(hrows % 2)) { chr--; }
-   int chc = hcols >> 1; if (!(hcols % 2)) { chc--; }
-   sr = cr - chr;
-   sc = cc - chc;
-
+   // Copy the h matrix to temporary matrix ph.
+   Matrix ph(rows, cols);
+   sr = rows - hrows; sr >>= 1;
+   sc = cols - hcols; sc >>= 1;
    ph.setZero();
    ph.block(sr, sc, hrows, hcols) = h;
-   //hw = &ph;
-   //}
-   if (orows != rows || ocols != cols) {
-      pad |= pado;
+
+   bool b_output_padded = false;
+
+   // Allocating a different output matrix if the size
+   // of the desired output matrix is different from the
+   // required resultant output matrix.
+   if (orows != rows || ocols != cols || sum_into_output) {
+      b_output_padded = true;
       po.resize(rows, cols);
-      //po.setZero();
-      //po.block(0, 0, orows, ocols) = o;
       ow = &po;
    }
 
-   //fft2ConCor(*mw, *hw, *ow, con_cor);
    fft2ConCor(pm, ph, *ow, con_cor);
 
-   if (pad & pado) {
-      int cor = orows >> 1; if (!(orows % 2)) { cor--; }
-      int coc = ocols >> 1; if (!(ocols % 2)) { coc--; }
-      int sr = cr - cor;
-      int sc = cc - coc;
+   if (b_output_padded) {
+      sr = rows - orows; sr >>= 1;
+      sc = cols - ocols; sc >>= 1;
       if (sum_into_output) {
          o += ow->block(sr, sc, orows, ocols);
       }
@@ -206,8 +223,3 @@ void fft2convolve(const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
       }
    }
 }
-
-#undef padm
-#undef padh
-#undef pado
-#undef padall

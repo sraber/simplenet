@@ -1,0 +1,167 @@
+
+class iPenality {
+public:
+   virtual ~iPenality() = 0 {};
+   virtual void Update(Matrix& w, Matrix& dw, double eta) = 0;
+   virtual double Error(Matrix& w) = 0;
+};
+
+class penalityNone : public iPenality
+{
+public:
+   void Update(Matrix& w, Matrix& dw, double eta) {
+      w -= eta * dw.transpose();
+   }
+   double Error(Matrix& w) {
+      return 0.0;
+   }
+};
+
+class penalityL2Weight : public iPenality
+{
+   double Strength;
+   double TheError;
+   bool Dirty;
+public:
+   penalityL2Weight(double _strength) : Strength(_strength), Dirty(true), TheError(0.0) {}
+   void Update(Matrix& w, Matrix& dw, double eta) {
+      Dirty = true;
+      w = (1.0 - eta*Strength) * w - eta * dw.transpose();
+   }
+   double Error(Matrix& w) {
+      if (Dirty) {
+         Dirty = false;
+         // Is Eigen wonderful or what!!
+         TheError = 0.5 * Strength * w.squaredNorm();
+      }
+      return TheError;
+   }
+};
+
+class Layer {
+public:
+   int Count;
+   int InputSize;
+   int OutputSize;
+   ColVector X;
+   ColVector Z;
+   Matrix W;
+   Matrix dW;
+   iActive* pActive;
+
+   class iCallBack
+   {
+   public:
+      virtual ~iCallBack() = 0 {};
+      virtual void Propeties(
+         const ColVector& x,
+         const Matrix& w, const Matrix& dw,
+         const ColVector& z) = 0;
+   };
+
+   shared_ptr<iPenality> spPenality;
+private:
+
+   shared_ptr<iCallBack> EvalPreActivationCallBack;
+   shared_ptr<iCallBack> EvalPostActivationCallBack;
+   shared_ptr<iCallBack> BackpropCallBack;
+
+   inline void CALLBACK(shared_ptr<iCallBack> icb)
+   {
+      if (icb != nullptr) {
+         icb->Propeties( X, W, dW, Z);
+      }
+   };
+   inline void BACKPROPCALLBACK(shared_ptr<iCallBack> icb, Matrix& iter_dW)
+   {
+      if (icb != nullptr) {
+         icb->Propeties(X, W, iter_dW, Z);
+      }
+   }
+
+public:
+   Layer(int input_size, int output_size, iActive* _pActive, shared_ptr<iGetWeights> _pInit, shared_ptr<iPenality> _pPenality =  make_shared<penalityNone>() ) :
+      // Add an extra row to align with the bias weight.
+      // This row should always be set to 1.
+      X(input_size+1), 
+      // Add an extra column for the bias weight.
+      W(output_size, input_size+1),
+      dW(input_size+1, output_size ),
+      pActive(_pActive),
+      InputSize(input_size),
+      OutputSize(output_size),
+      Z(output_size)
+   {
+      spPenality = _pPenality;
+      _pActive->Resize(output_size); 
+
+      _pInit->ReadFC(W);
+
+      dW.setZero();
+      Count = 0;
+   }
+
+   ~Layer() {
+      delete pActive;
+   }
+
+   ColVector Eval(const ColVector& _x) {
+      X.topRows(InputSize) = _x;   // Will throw an exception if _x.size != InputSize
+      X(InputSize) = 1;            // This accounts for the bias weight.
+      Z = W * X;
+      CALLBACK(EvalPreActivationCallBack);
+      // NOTE: The Active classes use the flyweight pattern.
+      //       Z is an in/out variable, its contents may be modified by Eval
+      //       but its dimension will not be changed.
+      if (EvalPostActivationCallBack != nullptr) {
+         ColVector out = pActive->Eval( Z );
+         EvalPostActivationCallBack->Propeties( X, W, dW, Z);
+         return out;
+      }
+      return pActive->Eval( Z );
+   }
+
+   RowVector BackProp(const RowVector& child_grad, bool want_layer_grad = true ) {
+      Count++;
+      RowVector delta_grad = child_grad * pActive->Jacobian(Z);
+      Matrix iter_w_grad = X * delta_grad;
+      BACKPROPCALLBACK(BackpropCallBack, iter_w_grad);
+      double a = 1.0 / (double)Count;
+      double b = 1.0 - a;
+      dW = a * iter_w_grad + b * dW;
+      if (want_layer_grad) {
+         return (delta_grad * W.block(0,0,OutputSize, InputSize));
+      }
+      else {
+         RowVector dummy;
+         return dummy;
+      }
+   }
+
+   void Update(double eta) {
+      Count = 0;
+      spPenality->Update(W, dW, eta);
+      dW.setZero();  // Not strictly needed.
+   }
+
+   void Save(shared_ptr<iPutWeights> _pOut) {
+      _pOut->Write(W, 1);
+      cout << "Weights saved" << endl;
+   }
+
+   double PenalityError() {
+      return spPenality->Error(W);
+   }
+
+   void SetEvalPreActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPreActivationCallBack = icb; }
+   void SetEvalPostActivationCallBack(shared_ptr<iCallBack> icb) {  EvalPostActivationCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBack> icb) {  BackpropCallBack = icb; }
+};
+//---------------------------------------------------------------
+
+   //------------ setup the network ------------------------------
+   int a1 = 9;
+   LayerList.push_back(make_shared<Layer>(2, a1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.0001)));
+   LayerList.push_back(make_shared<Layer>(a1, 1, new actSigmoid(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1),make_shared<penalityL2Weight>(0.0001)));
+   //--  End Tough example ------------------------------------
+

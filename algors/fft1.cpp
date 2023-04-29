@@ -1,4 +1,3 @@
-#include <windows.h>
 #include <math.h>
 #include <memory>
 #define SWAP(a,b) tempr=(a);(a)=(b);(b)=tempr
@@ -123,7 +122,7 @@ void real_four1(double * pdata, const int n, const int isign)
 //}
 
 inline 
-BOOL IsPower2(int n)
+bool IsPower2(int n)
 {
 return ((n) > 0 && !((n) & (n-1)));
 }

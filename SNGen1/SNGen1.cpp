@@ -13,11 +13,15 @@ using namespace std;
 typedef list< shared_ptr<Layer> > layer_list;
 layer_list LayerList;
 
-int main()
+int main(int argc, char* argv[])
 {
+   double s = 1.0;
+   int k = 16;
+   if (argc > 1){ s = atof(argv[1]); }
+   if (argc > 2){ k = atoi(argv[2]); }
+
    //------------ setup the network ------------------------------
-   const double s = 1.5;
-   const int k = 16;
+
    LayerList.push_back(make_shared<Layer>(2, k, make_unique<actTanh>(k), make_shared<IWeightsToRandom>(s)));
    LayerList.push_back(make_shared<Layer>(k, k, make_unique<actTanh>(k), make_shared<IWeightsToRandom>(s)));
    LayerList.push_back(make_shared<Layer>(k, k, make_unique<actTanh>(k), make_shared<IWeightsToRandom>(s)));

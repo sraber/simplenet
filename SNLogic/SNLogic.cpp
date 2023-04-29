@@ -130,6 +130,7 @@ void TestGradComp(tup t)
    cin >> c;
 }
 
+#define SGD
 
 int main(int argc, char* argv[])
 {
@@ -160,9 +161,15 @@ int main(int argc, char* argv[])
    // interior nodes.  Experiment with the number of interior nodes by changing the value of
    // a1.
    //------------ setup the network ------------------------------
+   optoLowPass::Momentum = 0.7;
+   optoADAM::B1 = 0.9;
+   optoADAM::B2 = 0.999;
    int a1 = 9;
-   LayerList.push_back(make_shared<Layer>(2, a1, make_unique<actSigmoid>(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
-   LayerList.push_back(make_shared<Layer>(a1, 1, make_unique<actSigmoid>(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1)));
+   //optoLowPass
+   //optoAverage
+   //optoADAM
+   LayerList.push_back(make_shared<Layer>(2, a1, make_unique<actSigmoid>(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1), make_shared< optoADAM>() ));
+   LayerList.push_back(make_shared<Layer>(a1, 1, make_unique<actSigmoid>(), make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier,1), make_shared< optoADAM>() ));
    //--  End Tough example ------------------------------------
    
 
@@ -222,6 +229,9 @@ int main(int argc, char* argv[])
             riter != LayerList.rend();
             riter++) {
             g = (*riter)->BackProp(g);
+#ifdef SGD
+            (*riter)->Update(0.001);
+#endif
          }
       }
 
@@ -229,11 +239,12 @@ int main(int argc, char* argv[])
       if ( !(loop % 100) ) {
          cout << "avg error " << avg_error << " " << endl;
       }
+#ifndef SGD
       for (const auto& lit : LayerList) {
          double eta = 0.75;
          lit->Update(eta);
-         //cout << lit->W(0, 0) << " , " << lit->W(0, 1) << endl;
       }
+#endif
    }
 
    int l = 0;

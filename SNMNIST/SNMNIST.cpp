@@ -53,7 +53,7 @@ void InitFCModel(bool restore)
    int l = 1; // Layer counter
    LayerList.push_back(make_shared<Layer>(size_in, size_out, make_unique<actReLU>(size_out),
                  restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                           dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );
+                           dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1))) );
             LayerList.back()->SetBackpropCallBack( MCB  );
    l++;
 

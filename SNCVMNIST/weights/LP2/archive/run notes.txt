@@ -1,0 +1,35 @@
+LP2C1 notes:
+Filters 1 - 3 developed very quickly. There were well formed in the 1st 1000 iterations.
+After 2000 itterations filter 4 is still not well formed and this is reflected in the 1st
+FC weight matrix.  The 4th quadrant has distictly less character than other
+quadrants of the matrix.
+1 full epoch and filter 4 is still not forming.  The 1st FC matrix clearly shows that
+no attention is being given to filter 4 results.
+3 full epochs and filter 4 is just barely forming.  Test correct: 9360
+5 full epochs and filter 4 is not forming.  Test correct: 9439
+smooth
+7 epocs.  Now filter 4 is clearly forming and the other filters are keeping their 
+form.  Seems to indicate that filter 4 is orthoganal or at least indpendant of the
+others.
+27 epocs.  Test correct: 9544  Average of the training error is %96.6
+47 epocs.  Test correct: 9704  Average of the training error is %97.8.  I thought
+the model was starting to overfit but now it does not seem like that is so.
+67 epocs.  Test correct: 9746  Average of the training error is %98.1.
+87 epocs.  Test correct: 9719  Average of the training error is %98.2.  No progress.
+107 epocs. Test correct: 9729  Average of the training error is %98.3.  No progress.
+Start training on shifted and rotated (about zero shift)
+1000 image warm up.  Test correct: 9551  Headding 
+1 epoc.  Test correct: 9544
+3 epocs. Test correct: 9654  Average of the training error is %95.6.
+5 epocs. Test correct: 9680  Average of the training error is %95.9.
+smooth with width of 3.  This was suficient to put some content in the Layer 4 weights where there were quiecnet rows.
+2 epochs.  Test correct: 9463  Interestingly, the quiecent rows are reemerging in Layer 4 weights.
+3 epocs. Test correct: 9667  Average of the training error is %96.0.
+5 epocs. Test correct: 9711  Average of the training error is %96.4.
+7 epocs. Test correct: 9786  Average of the training error is %96.9.  The flat rows in layer 4 remain.   Rows 5,6,7 and 15 are pretty darn flat.
+9 epocs. Test correct: 9781
+11 epocs. Test correct: 9794
+21 epocs. Test correct: 9803  Average of the training error is %97.3. Step size 0.0001
+22 epocs. Test correct: 9822  Average of the training error is %97.4.
+24 epocs. Test correct: 9824  Average of the training error is %97.5.
+25 epocs. Test correct: 9825  Average of the training error is %97.5. Step size 0.000001

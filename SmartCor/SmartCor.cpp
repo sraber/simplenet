@@ -452,7 +452,7 @@ void InitSmartCor(bool restore)
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
                            make_unique<actReLU>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
+                                     //dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
                                      dynamic_pointer_cast<iGetWeights>( make_shared<InitSmartCorConvoLayer>(pattern_size, pattern_center, pattern_size/4, 2)),
                            true )
                            );
@@ -478,7 +478,7 @@ void InitSmartCor(bool restore)
    //size_out = size_in;
    //LayerList.push_back(make_shared<Layer>(size_in, size_out, new actReLU(size_out), 
    //                        restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-   //                                  dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );   l++;
+   //                                  dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1))) );   l++;
    //---------------------------------------------------------------      
 
    // Fully Connected Layer 4 ---------------------------------------

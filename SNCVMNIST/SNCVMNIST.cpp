@@ -1,6 +1,6 @@
 // SNCVMNIST.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
-#define LOGPOLAR
+//#define LOGPOLAR
 #ifdef LOGPOLAR
    const int INPUT_ROWS = 32;
    const int INPUT_COLS = 32;
@@ -8,13 +8,10 @@
    const int INPUT_ROWS = 28;
    const int INPUT_COLS = 28;
 #endif
-#define FFT
-#define CYCLIC
+//#define FFT
+//#define CYCLIC
 //#define RETRY 1
 #define SGD
-
-// Use MOMENTUM 0.0 for grad comp testing.
-#define MOMENTUM 0.6
 
 #include <Eigen>
 #include <iostream>
@@ -37,6 +34,11 @@
 
 #include <utility.h>
 //#include <Windows.h>
+
+   // Define static optomizer variables.
+double optoADAM::B1 = 0.0;
+double optoADAM::B2 = 0.0;
+double optoLowPass::Momentum = 0.0;
 
 typedef vector< shared_ptr<Layer> > layer_list;
 typedef vector< shared_ptr<iConvoLayer> > convo_layer_list;
@@ -83,7 +85,7 @@ public:
    }
 };
 int myAveFlattenCallBack::label = 0;
-shared_ptr<iCallBackSink> ACB = make_shared<myAveFlattenCallBack>(path);
+shared_ptr<iCallBackSink> ACB;// = make_shared<myAveFlattenCallBack>(path);
 
 class myVMCallBack : public iCallBackSink
 {
@@ -93,14 +95,16 @@ public:
    // Inherited via iCallBackSink
    void Properties(std::map<string, CallBackObj>& props) override
    {
-      const vector_of_matrix& z = props[w].vm.get();
-      cout << w << ":" << endl;
-      int count = 0;
-      for (auto m : z) {
-         cout << count++ << ":\n" << m << endl;
+      if (props["ID"].i == FilterLayer2D::Backprop1) {
+         const vector_of_matrix& z = props[w].vm.get();
+         cout << w << ":" << endl;
+         int count = 0;
+         for (auto m : z) {
+            cout << count++ << ": " << m.norm() << " | " << endl;
+         }
+         // For examining the Jacobian of the Spectral Pool.
+         //cout << "Norm J:" << endl << props["J"].m.get() << endl;
       }
-      // For examining the Jacobian of the Spectral Pool.
-      //cout << "Norm J:" << endl << props["J"].m.get() << endl;
    }
 };
 
@@ -112,18 +116,18 @@ public:
    // Inherited via iCallBackSink
    void Properties(std::map<string, CallBackObj>& props) override
    {
-      const Matrix& z = props[w].m.get();
-      cout << w << ":" << endl;
+      const ColVector& z = props[w].cv.get();
+      //cout << w << ":" << endl;
 
-         cout << z << endl;
+         cout << z.transpose() << endl;
 
       // For examining the Jacobian of the Spectral Pool.
       //cout << "Norm J:" << endl << props["J"].m.get() << endl;
    }
 };
 
-shared_ptr<iCallBackSink> MCB;// = make_shared<myVMCallBack>("X");
-shared_ptr<iCallBackSink> MCB1;// = make_shared<myVMCallBack>("Z");
+shared_ptr<iCallBackSink> MCB; // = make_shared<myVMCallBack>("dW");
+shared_ptr<iCallBackSink> MCB1;// = make_shared<myMCallBack>("Z");
 shared_ptr<iCallBackSink> MCB2;// = make_shared<myMCallBack>("J");
 
 // ---------------------------------------------------
@@ -582,33 +586,6 @@ struct SNModel {
 
 };
 */
-class StatsOutput
-{
-   ofstream owf;
-public:
-   StatsOutput(string name) : owf(path + "\\"  + name + ".csv", ios::trunc)
-   {
-   }
-   void Write(shared_ptr<FilterLayer2D> fl)
-   {
-      assert(owf.is_open());
-      assert(fl);
-
-      //Matrix& dw = fl->dW[0];
-      //Eigen::Map<RowVector> rvw(dw.data(), dw.size());
-      //const static Eigen::IOFormat OctaveFmt(6, 0, ", ", "\n", "", "", "", "");
-      //owf << rvw.format(OctaveFmt) << endl;
-
-      for (int i = 0; i < fl->dW.size();i++) {
-         owf << fl->dW[i].blueNorm();
-         if (i < fl->dW.size() - 1) {
-            owf << ",";
-         }
-      }
-      owf << endl;
-
-   }
-};
 
 class GradOutput
 {
@@ -680,9 +657,6 @@ LogPolarSupportMatrix PrecomputeLogPolarSupportMatrix(int in_rows, int in_cols, 
    LogPolarSupportMatrix lpsm;
    lpsm.resize(out_rows, std::vector<std::tuple<int, int, int, int, double, double>>(out_cols));
    
-   // For now restrict to square matrix.
-   runtime_assert(out_rows == out_cols)
-   runtime_assert(in_rows == in_cols )
    //                   if in_rows      odd              even
    double r_center = in_rows % 2 ? in_rows >> 1 : (in_rows >> 1) - 0.5;
    double c_center = in_cols % 2 ? in_cols >> 1 : (in_cols >> 1) - 0.5;
@@ -703,7 +677,11 @@ LogPolarSupportMatrix PrecomputeLogPolarSupportMatrix(int in_rows, int in_cols, 
    // at x = rows - 1, y = log(rad)
    // dy / dx = (log(rad) - log(0.5)) / rows-1
    // b = log(0.5)
-   const double dp = (std::log(rad_max) - std::log(0.5)) / (double)(out_cols-1); // Here we do want to reach log(rad_max).
+   // NOTE: It doesn't matter what log base is used.  The sample points on the linear scale come out the same.
+   //       Different log bases give different scale curves but of the same shape and it is this shape that
+   //       is mapped to the range rad_max.  When the log scale points are trasformed to linear positions
+   //       the sample positions are the same no matter the base of the log.
+   const double dp = (std::log(rad_max) - std::log(0.5)) / (double)(out_cols - 1); // Here we do want to reach log(rad_max).
    const double  b = std::log(0.5);
 
    ColVector rd(out_cols);
@@ -754,12 +732,6 @@ void ConvertToLogPolar(Matrix& m, Matrix& out, LogPolarSupportMatrix& lpsm )
 {
    int rows = out.rows();
    int cols = out.cols();
-   // Not right.
-   // double rad = cols > rows ? (double)rows : (double)cols;
-   
-   // For now restrict to square matrix.
-   runtime_assert(rows == cols)
-   runtime_assert(m.rows() == m.cols() )
 
    for (int r = 0; r < rows; r++) {
       for (int c = 0; c < cols; c++) {
@@ -867,8 +839,6 @@ int GetLabel(ColVector& lv)
    return 0;
 }
 
-
-
 //---------------------------------------------------------------------------------
 //                         Big Kernel Method
 //
@@ -953,6 +923,7 @@ public:
    }
 };
 
+/*
 //---------------------------------------------------------------------------------
 void InitBigKernelModel(bool restore)
 {
@@ -975,7 +946,7 @@ void InitBigKernelModel(bool restore)
    ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
                            make_unique<actReLU>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l++))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in) ),
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in) ),
                            true) ); // No bias
                       //               dynamic_pointer_cast<iGetWeights>( make_shared<InitBigKernelConvoLayer>()),
 
@@ -1147,32 +1118,41 @@ void InitLeNet5Model( bool restore )
 
 }
 //------------------------------- End LeNet-5 -------------------------------------
+*/
 //---------------------------------------------------------------------------------
 void InitLeNet5AModel(bool restore)
 {
-   model_name = "LeNet5A";
+   model_name = "LeNet5\\LeNet5A";
    ConvoLayerList.clear();
    LayerList.clear();
 
-   // Convolution Layer 1 -----------------------------------------
+   optoADAM::B1 = 0.9;
+   optoADAM::B2 = 0.999;
+   optoLowPass::Momentum = 0.8;
+
+   //typedef optoLowPass OPTO;
+   typedef optoADAM OPTO;
+
+   int l = 1; // Layer counter
+
+   // Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
    int size_in  = 28;
    int size_out = 28;
    int kern = 5;
-   int kern_per_chn = 32;
    int chn_in = 1;
-   int chn_out = kern_per_chn * chn_in;
-   int l = 1; // Layer counter
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
+   int chn_out = 6;
+   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), chn_out,
                           make_unique<actTanh>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01,0.0)),
+                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in)),
+                           make_shared<OPTO>(),
                            false) ); // No bias - false -> use bias
    l++;
    //---------------------------------------------------------------
- 
+   // 
    // Pooling Layer 2 ----------------------------------------------
-   // Type: poolMax2D
+   // Type: poolAvg2D
    size_in  = size_out;
    size_out = 14;
    chn_in = chn_out;
@@ -1185,118 +1165,18 @@ void InitLeNet5AModel(bool restore)
    // Convolution Layer 3 -----------------------------------------
    // Type: FilterLayer2D
    size_in  = size_out;
-   size_out = 7;
-   kern = 5;
-   kern_per_chn = 2;
-   chn_in = chn_out;
-   chn_out = kern_per_chn * chn_in;
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
-                          make_unique<actTanh>(), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01,0.0)) ));
-   l++;
-   //---------------------------------------------------------------
-
-   // Pooling Layer 4 ----------------------------------------------
-   // Type: poolMax2D
-   size_in  = size_out;
-   size_out = 1;
-   chn_in = chn_out;
-
-   assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<poolAvg2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out)));
-   l++;  //Need to account for each layer when restoring.
-   //---------------------------------------------------------------      
-
-   // Flattening Layer 5 --------------------------------------------
-   // Type: Flatten2D
-   size_in  = size_out;
-   chn_in = chn_out;
-   size_out = size_in * size_in * chn_in;
-   chn_out = 1;
-   ConvoLayerList.push_back( make_shared<Flatten2D>(clSize(size_in, size_in), chn_in) );
-   l++;
-   //---------------------------------------------------------------      
-
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-
-   // Fully Connected Layer 6 ---------------------------------------
-   // Type: ReLU
-   size_in = size_out;
-   size_out = 512;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out,make_unique<actReLU>(), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01,0.0)) ));
-   l++;
-   //---------------------------------------------------------------      
-
-   // Fully Connected Layer 7 ---------------------------------------
-   // Type: SoftMAX
-   size_in = size_out;
-   size_out = 10;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out,make_unique<actSoftMax>(), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToRandom>(0.01,0.0)) ));
-   l++;
-   //---------------------------------------------------------------      
-
-   // Loss Layer - Not part of network, must be called seperatly.
-   // Type: LossCrossEntropy
-   loss = make_shared<LossL2>(size_out, 1);   
-   //--------------------------------------------------------------
-
-}
-//---------------------------- End LeNet 5A ---------------------------------------
-//---------------------------------------------------------------------------------
-void InitLeNet5BModel(bool restore)
-{
-   model_name = "LeNet5B";
-   ConvoLayerList.clear();
-   LayerList.clear();
-   cout << "Initializing model: " << model_name << " , restore = " << restore << endl;
-
-   // Convolution Layer 1 -----------------------------------------
-   // Type: FilterLayer2D
-   int size_in  = 28;
-   int size_out = 28;
-   int kern = 7;
-   int kern_per_chn = 16;
-   int chn_in = 1;
-   int chn_out = kern_per_chn * chn_in;
-   int l = 1; // Layer counter
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
-                          make_unique<actLeakyReLU>(0.01), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );
-   l++;
-   //---------------------------------------------------------------
- 
-   // Pooling Layer  ----------------------------------------------
-   // Type: PoolAvg2D
-   size_in  = size_out;
-   size_out = 14;
-   chn_in = chn_out;
-
-   assert(!(size_in % size_out));
-   ConvoLayerList.push_back(make_shared<poolAvg2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out)));
-   l++;  //Need to account for each layer when restoring.
-   //---------------------------------------------------------------
-
-   // Convolution Layer  -----------------------------------------
-   // Type: FilterLayer2D
-   size_in  = size_out;
    size_out = 10;
    kern = 5;
-   kern_per_chn = 2;
    chn_in = chn_out;
-   chn_out = kern_per_chn * chn_in;
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
-                          make_unique<actLeakyReLU>(0.01), 
+   chn_out = 16;
+   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), chn_out,
+                          make_unique<actTanh>(),
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );
+                                     dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in)),
+      make_shared<OPTO>()));
    l++;
    //---------------------------------------------------------------
-
+   //
    // Pooling Layer 4 ----------------------------------------------
    // Type: poolAvg2D
    size_in  = size_out;
@@ -1305,24 +1185,26 @@ void InitLeNet5BModel(bool restore)
 
    assert(!(size_in % size_out));
    ConvoLayerList.push_back(make_shared<poolAvg2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out)));
-   l++;
+   l++;  //Need to account for each layer when restoring.
    //---------------------------------------------------------------      
-   
-   // Convolution Layer  -----------------------------------------
+  
+   // Convolution Layer 5 -----------------------------------------
    // Type: FilterLayer2D
-   size_in  = size_out;
+   size_in = size_out;
    size_out = 1;
    kern = 5;
-   kern_per_chn = 2;
    chn_in = chn_out;
-   chn_out = kern_per_chn * chn_in;
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), kern_per_chn, 
-                          make_unique<actLeakyReLU>(0.01), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in))) );
+   chn_out = 120;
+   ConvoLayerList.push_back(make_shared<FilterLayer2D>(clSize(size_in, size_in), chn_in, clSize(size_out, size_out), clSize(kern, kern), chn_out,
+                           make_unique<actReLU>(),
+                              restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+                                        dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in)),
+      make_shared<OPTO>()));
    l++;
    //---------------------------------------------------------------
-   // Flattening Layer 5 --------------------------------------------
+  
+
+   // Flattening Layer --------------------------------------------
    // Type: Flatten2D
    size_in  = size_out;
    chn_in = chn_out;
@@ -1334,204 +1216,45 @@ void InitLeNet5BModel(bool restore)
 
    //--------- setup the fully connected network -------------------------------------------------------------------------
 
-   // Fully Connected Layer 6 ---------------------------------------
+   // Fully Connected Layer ---------------------------------------
    // Type: ReLU
    size_in = size_out;
-   size_out = 32;
-   LayerList.push_back(make_shared<Layer>(size_in, size_out,make_unique<actLeakyReLU>(0.01), 
+   size_out = 84;
+   LayerList.push_back(make_shared<Layer>(size_in, size_out,make_unique<actReLU>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );   l++;
+                                     dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+      make_shared<OPTO>()));
+   l++;
    //---------------------------------------------------------------      
-
+   // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+   //size_in = size_out;
+   //size_out = 16;
+   //LayerList.push_back(make_shared<Layer>(size_in, size_out, make_unique<actReLU>(),
+  //    restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+  //    dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToRandom>(0.01, 0.0)),
+  //    make_shared<OPTO>()));
+   //l++;
+   //---------------------------------------------------------------    
    // Fully Connected Layer 7 ---------------------------------------
    // Type: SoftMAX
    size_in = size_out;
    size_out = 10;
    LayerList.push_back(make_shared<Layer>(size_in, size_out,make_unique<actSoftMax>(), 
                            restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, 1))) );   l++;
-   //---------------------------------------------------------------      
-
-   // Loss Layer - Not part of network, must be called seperatly.
-   loss = make_shared<LossL2>(size_out, 1);   
-   //--------------------------------------------------------------
-
-}
-//---------------------------- End LeNet 5B ---------------------------------------
-//---------------------------------------------------------------------------------
-
-void InitLPModel1(bool restore)
-{
-   // LP1B - 64 x 64
-   //model_name = "LP1C\\LP1C";
-   // Adding one kernel, making 5.
-   //model_name = "LP1C2\\LP1C2";
-   // 6 kernels.
-   model_name = "LP1C4\\LP1C3";
-   ConvoLayerList.clear();
-   LayerList.clear();
-   cout << "Initializing model: " << model_name << " , restore = " << restore << endl;
-
-   // Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   clSize size_in(INPUT_ROWS, INPUT_COLS);
-   clSize size_out(INPUT_ROWS, 4);
-   clSize size_kern(INPUT_ROWS, INPUT_COLS);
-   int kern_per_chn = 6;
-   int chn_in = 1;
-   int chn_out = kern_per_chn * chn_in;
-   int l = 1; // Layer counter
-   ConvoLayerList.push_back( make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn, 
-                          //make_unique<actLeakyReLU>(0.04), 
-                          make_unique<actReLU>(), 
-                          //make_unique<actLinear>(), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
-                           true ) ); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-   l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   // Type: poolAvg2D
-   size_in  = size_out;
-   size_out.Resize(INPUT_ROWS>>1, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   ConvoLayerList.push_back(make_shared<poolAvg2D>(size_in, chn_in, size_out) );
-   //dynamic_pointer_cast<poolAvg2D>( ConvoLayerList.back() )->SetEvalPostActivationCallBack( MCB );
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in  = size_out;
-   chn_in = chn_out;
-   int len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   ConvoLayerList.push_back( make_shared<Flatten2D>(size_in, chn_in) );
-   l++;
-   //---------------------------------------------------------------      
-   // 
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   int len_in = len_out;
-   len_out = 32;
-   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );
-   l++;
-   //---------------------------------------------------------------  
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   LayerList.push_back(make_shared<Layer>(len_in, len_out,make_unique<actSoftMax>(), 
-                           restore ? dynamic_pointer_cast<iGetWeights>( make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) : 
-                                     dynamic_pointer_cast<iGetWeights>( make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))) );
+                                     dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+      make_shared<OPTO>()));
    l++;
    //---------------------------------------------------------------      
 
    // Loss Layer - Not part of network, must be called seperatly.
    // Type: LossCrossEntropy
-   loss = make_shared<LossCrossEntropy>(len_out, 1);   
+   loss = make_shared<LossCrossEntropy>(size_out, 1);
    //--------------------------------------------------------------
 
 }
-//---------------------------- End InitLPModel1a ---------------------------------------
-void InitLPModel1a(bool restore)
-{
-   // LP1B - 64 x 64
-   //model_name = "LP1C\\LP1C";
-   // Adding one kernel, making 5.
-   //model_name = "LP1C2\\LP1C2";
-   // 6 kernels.
-   model_name = "LP1C4A\\LP1C3A";
-   ConvoLayerList.clear();
-   LayerList.clear();
-   cout << "Initializing model: " << model_name << " , restore = " << restore << endl;
+//---------------------------- End LeNet 5A ---------------------------------------
 
-   // Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   clSize size_in(INPUT_ROWS, INPUT_COLS);
-   clSize size_out(INPUT_ROWS, 4);
-   clSize size_kern(INPUT_ROWS, INPUT_COLS);
-   int kern_per_chn = 6;
-   int chn_in = 1;
-   int chn_out = kern_per_chn * chn_in;
-   int l = 1; // Layer counter
-   ConvoLayerList.push_back(make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-      //make_unique<actLeakyReLU>(0.04), 
-      make_unique<actReLU>(),
-      //make_unique<actLinear>(), 
-      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
-      true)); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-   l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   // Type: poolMax2D
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   ConvoLayerList.push_back(make_shared<poolMax2D>(size_in, chn_in, size_out));
-   //dynamic_pointer_cast<poolAvg2D>( ConvoLayerList.back() )->SetEvalPostActivationCallBack( MCB );
-   l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   // Type: poolAvg2D
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS >> 1, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   ConvoLayerList.push_back(make_shared<poolAvg2D>(size_in, chn_in, size_out));
-   //dynamic_pointer_cast<poolAvg2D>( ConvoLayerList.back() )->SetEvalPostActivationCallBack( MCB );
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   int len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   ConvoLayerList.push_back(make_shared<Flatten2D>(size_in, chn_in));
-   l++;
-   //---------------------------------------------------------------      
-   // 
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   int len_in = len_out;
-   len_out = 32;
-   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
-   l++;
-   //---------------------------------------------------------------  
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
-   l++;
-   //---------------------------------------------------------------      
-
-   // Loss Layer - Not part of network, must be called seperatly.
-   // Type: LossCrossEntropy
-   loss = make_shared<LossCrossEntropy>(len_out, 1);
-   //--------------------------------------------------------------
-
-}
-//---------------------------- End InitLPModel1a ---------------------------------------
 
 void InitLPModel2(bool restore)
 {
@@ -1540,12 +1263,18 @@ void InitLPModel2(bool restore)
    LayerList.clear();
    cout << "Initializing model: " << model_name << " , restore = " << restore << endl;
 
+   optoADAM::B1 = 0.9;
+   optoADAM::B2 = 0.999;
+   optoLowPass::Momentum = 0.8;
+
+   typedef optoADAM OPTO;
+
    // Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
    clSize size_in(INPUT_ROWS, INPUT_COLS);
    clSize size_out(INPUT_ROWS, 4);
    clSize size_kern(INPUT_ROWS, INPUT_COLS);
-   int kern_per_chn = 4;
+   int kern_per_chn = 2;
    int chn_in = 1;
    int chn_out = kern_per_chn * chn_in;
    int l = 1; // Layer counter
@@ -1554,8 +1283,12 @@ void InitLPModel2(bool restore)
       make_unique<actReLU>(),
       //make_unique<actLinear>(), 
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+      make_shared<OPTO>(),
       true)); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
+
+   dynamic_pointer_cast<FilterLayer2D>( ConvoLayerList.back() )->SetBackpropCallBack( MCB );
+
    l++;
    //---------------------------------------------------------------
    // Pooling Layer ----------------------------------------------
@@ -1586,28 +1319,39 @@ void InitLPModel2(bool restore)
    // Fully Connected Layer ---------------------------------------
    // Type: ReLU
    int len_in = len_out;
-   len_out = 32;
-   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
+   len_out = 16;
+   LayerList.push_back(make_shared<Layer>(len_in, len_out, 
+      //make_unique<actLeakyReLU>(0.01),
+      make_unique<actSigmoid>(),
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+      make_shared<OPTO>()
+      ));
    l++;
    //---------------------------------------------------------------  
    // Fully Connected Layer ---------------------------------------
    // Type: ReLU
-   len_in = len_out;
-   len_out = 16;
-   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
-   l++;
-   //---------------------------------------------------------------  
+   //len_in = len_out;
+   //len_out = 16;
+   //LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
+   //   restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+   //   dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+   //   make_shared<OPTO>()
+   //   ));
+   //l++;
+   ////---------------------------------------------------------------  
    // Fully Connected Layer ---------------------------------------
    // Type: SoftMAX
    len_in = len_out;
    len_out = 10;
    LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+      make_shared<OPTO>()
+      ));
+
+   dynamic_pointer_cast<Layer>(LayerList.back())->SetEvalPostActivationCallBack(MCB1);
+
    l++;
    //---------------------------------------------------------------      
 
@@ -1622,6 +1366,109 @@ void InitLPModel2(bool restore)
 void InitLPModel3(bool restore)
 {
    model_name = "LP3\\LP3C1";
+   ConvoLayerList.clear();
+   LayerList.clear();
+   cout << "Initializing model: " << model_name << " , restore = " << restore << endl;
+
+   optoADAM::B1 = 0.9;
+   optoADAM::B2 = 0.999;
+   optoLowPass::Momentum = 0.8;
+
+   //typedef optoLowPass OPTO;
+   typedef optoADAM OPTO;
+
+   // Convolution Layer -----------------------------------------
+   // Type: FilterLayer2D
+   clSize size_in(INPUT_ROWS, INPUT_COLS);
+   clSize size_out(INPUT_ROWS, 4);
+   clSize size_kern(INPUT_ROWS, INPUT_COLS);
+   int kern_per_chn = 3;
+   int chn_in = 1;
+   int chn_out = kern_per_chn * chn_in;
+   int l = 1; // Layer counter
+   ConvoLayerList.push_back(make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
+      //make_unique<actLeakyReLU>(0.04), 
+      make_unique<actReLU>(),
+      //make_unique<actLinear>(), 
+      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+      make_shared<OPTO>(),
+      true)); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
+
+   dynamic_pointer_cast<FilterLayer2D>(ConvoLayerList.back())->SetBackpropCallBack(MCB);
+
+   l++;
+   //---------------------------------------------------------------
+   // Pooling Layer ----------------------------------------------
+   // Type: poolAvg2D
+   size_in = size_out;
+   size_out.Resize(INPUT_ROWS >> 1, 1);
+   chn_in = chn_out;
+
+   assert(!(size_in.rows % size_out.rows));
+   assert(!(size_in.cols % size_out.cols));
+   ConvoLayerList.push_back(make_shared<poolAvg2D>(size_in, chn_in, size_out));
+   //dynamic_pointer_cast<poolAvg2D>( ConvoLayerList.back() )->SetEvalPostActivationCallBack( MCB );
+   l++;
+   //---------------------------------------------------------------
+   // Flattening Layer --------------------------------------------
+   // Type: Flatten2D
+   size_in = size_out;
+   chn_in = chn_out;
+   int len_out = size_in.rows * size_in.cols * chn_in;
+   chn_out = 1;
+   ConvoLayerList.push_back(make_shared<Flatten2D>(size_in, chn_in));
+   dynamic_pointer_cast<Flatten2D>(ConvoLayerList.back())->SetEvalPostActivationCallBack(ACB);
+   l++;
+   //---------------------------------------------------------------      
+   // 
+   //--------- setup the fully connected network -------------------------------------------------------------------------
+   // 
+   // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+   int len_in = len_out;
+   len_out = 32;
+   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
+      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+      make_shared<OPTO>()
+      ));
+   l++;
+   //---------------------------------------------------------------  
+   // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+   //len_in = len_out;
+   //len_out = 16;
+   //LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
+   //   restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+   //   dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+   //   make_shared<optoADAM>()
+   //   ));
+   //l++;
+   ////---------------------------------------------------------------  
+   // Fully Connected Layer ---------------------------------------
+   // Type: SoftMAX
+   len_in = len_out;
+   len_out = 10;
+   LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
+      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+      make_shared<OPTO>()
+      ));
+   l++;
+   //---------------------------------------------------------------      
+
+   // Loss Layer - Not part of network, must be called seperatly.
+   // Type: LossCrossEntropy
+   loss = make_shared<LossCrossEntropy>(len_out, 1);
+   //--------------------------------------------------------------
+
+}
+//---------------------------- End InitLPModel3 ---------------------------------------
+
+void InitLPSpecModel(bool restore)
+{
+   model_name = "LPS\\LP3C1";
    ConvoLayerList.clear();
    LayerList.clear();
    cout << "Initializing model: " << model_name << " , restore = " << restore << endl;
@@ -1641,7 +1488,8 @@ void InitLPModel3(bool restore)
       make_unique<actReLU>(),
       //make_unique<actLinear>(), 
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, chn_in)),
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+      make_shared<optoADAM>(),
       true)); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
    l++;
    //---------------------------------------------------------------
@@ -1697,7 +1545,9 @@ void InitLPModel3(bool restore)
    len_out = 32;
    LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+      make_shared<optoADAM>()
+      ));
    l++;
    //---------------------------------------------------------------   
    // Fully Connected Layer ---------------------------------------
@@ -1706,7 +1556,9 @@ void InitLPModel3(bool restore)
    len_out = 10;
    LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+      make_shared<optoADAM>()
+      ));
    l++;
    //---------------------------------------------------------------      
 
@@ -1716,8 +1568,9 @@ void InitLPModel3(bool restore)
    //--------------------------------------------------------------
 
 }
-//---------------------------- End InitLPModel3 ---------------------------------------
+//---------------------------- End InitLPSpecModel ---------------------------------------
 
+/*
 void InitTestSpec(bool restore)
 {
    model_name = "LP3\\TS";
@@ -1761,7 +1614,7 @@ void InitTestSpec(bool restore)
    len_out = 10;
    LayerList.push_back(make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
       restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kanning, 1))));
+      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1))));
    l++;
    //---------------------------------------------------------------      
 
@@ -1772,11 +1625,12 @@ void InitTestSpec(bool restore)
 
 }
 //---------------------------- End InitTestSpec ---------------------------------------
+*/
 
 typedef void (*InitModelFunction)(bool);
 
 //InitModelFunction InitModel = InitBigKernelModel;
-InitModelFunction InitModel = InitLPModel2;
+InitModelFunction InitModel = InitLeNet5AModel;
 
 void SaveModelWeights()
 {
@@ -1851,7 +1705,8 @@ void MakeBiasErrorFunction( string outroot, string dataroot )
       COMPUTE_LOSS
       f(i) = e;
 
-      ipcl->Count = 0;
+      // REVIEW: Optomizer was put into Layer, this might change how this test works.
+      //ipcl->Count = 0;
       vector_of_matrix vm_backprop(1);  // kpc kernels * 1 channel
       RowVector g = loss->LossGradient();
       for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
@@ -1882,6 +1737,7 @@ void MakeBiasErrorFunction( string outroot, string dataroot )
    odwf.close();
 }
 
+// REVIEW: Optomizer breaks this test.  Need to figure out how to fix it.
 void TestGradComp(string dataroot)
 {
    //MNISTReader reader(  dataroot + "\\train\\train-images-idx3-ubyte",
@@ -1957,14 +1813,14 @@ void TestGradComp(string dataroot)
                }
             }
 
-            double grad1 = ipcl->dW[kn](r, c);
+            // double grad1 = pOptomizer-> ??  kn](r, c);
             //-------------------------
 
             double grad = (f2 - f1) / (2.0 * eta);
 
             //cout << f1 << ", " << grad1 << ", " << grad << ", " << abs(grad - grad1) << endl;
 
-            dif(r, c) = abs(grad - grad1);
+            // dif(r, c) = abs(grad - grad1);
          }
       }
 
@@ -2149,7 +2005,7 @@ void NetGrowthExp()
    string local_model_name = "LP1C\\LP1C";
    FilterLayer2D src(size_in, chn_in, size_out, size_kern, kern_per_chn,
       make_unique<actReLU>(),
-      dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, local_model_name + "." + to_string(1))),
+      dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, local_model_name + "." + to_string(1))), make_shared<optoAverage>(),
       true);
 
    int len_in = (INPUT_ROWS>>1) * kern_per_chn;
@@ -2167,7 +2023,7 @@ void NetGrowthExp()
    local_model_name = "LP1C1\\LP1C1";
    FilterLayer2D tar(size_in, chn_in, size_out, size_kern, kern_per_chn,
       make_unique<actReLU>(),
-      dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, local_model_name + "." + to_string(1))),
+      dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, local_model_name + "." + to_string(1))), make_shared<optoAverage>(),
       true);
 
    len_in = (INPUT_ROWS>>1) * kern_per_chn;
@@ -2222,7 +2078,7 @@ void TestSave()
       auto ipc0 = dynamic_pointer_cast<FilterLayer2D>(ConvoLayerList[clay[i]]);
       auto ipc1 = dynamic_pointer_cast<FilterLayer2D>(clist1[clay[i]]);
 
-      int kpc = ipc1->KernelPerChannel;
+      int kpc = ipc1->FilterChannels;
       int chn = ipc1->Channels;
       int ks = ipc1->KernelSize.rows; // Assume square
       int kn = chn * kpc;
@@ -2575,11 +2431,6 @@ void Train(int nloop, string dataroot, double eta, int load)
    cout << "NOTE: There is auto-repeate code running!  retry = " << RETRY << endl;
 #endif
 
-#ifdef MOMENTUM
-   cout << "Momentum is on.  a = " << MOMENTUM << endl;
-#else
-   cout << "Momentum is off." << endl;
-#endif
 #ifdef LOGPOLAR
    cout << "Running Log-Polar samples." << endl;
 #endif
@@ -2620,36 +2471,6 @@ void Train(int nloop, string dataroot, double eta, int load)
       if (ist) { ist->StashWeights(); }
    }
 
-//#define STATS
-#ifdef STATS
-   vector<GradOutput> lveo(LayerList.size());
-   for (int i = 0; i < lveo.size(); i++) {
-      lveo[i].Init("leval" + to_string(i));
-   }
-   vector<GradOutput> clveo(ConvoLayerList.size());
-   for (int i = 0; i < clveo.size(); i++) {
-      clveo[i].Init("cleval" + to_string(i));
-   }
-
-   vector<GradOutput> lvgo(LayerList.size()+1);
-   for (int i = 0; i < lvgo.size(); i++) {
-      lvgo[i].Init("lgrad" + to_string(i));
-   }
-   vector<GradOutput> clvgo(ConvoLayerList.size());
-   for (int i = 0; i < clvgo.size(); i++) {
-      clvgo[i].Init("clgrad" + to_string(i));
-   }
-
-   #define clveo_write(I,M) clveo[I].Write(M)
-   #define lveo_write(I,M) lveo[I].Write(M)
-   #define clvgo_write(I,M) clvgo[I].Write(M)
-   #define lvgo_write(I,M) lvgo[I].Write(M)
-#else
-   #define clveo_write(I,M) ((void)0)
-   #define lveo_write(I,M) ((void)0)
-   #define clvgo_write(I,M) ((void)0)
-   #define lvgo_write(I,M) ((void)0)
-#endif
    ErrorOutput err_out(path, model_name);
    ClassifierStats stat_class;
 
@@ -2728,26 +2549,24 @@ void Train(int nloop, string dataroot, double eta, int load)
             TrasformMNISTtoMatrix(temp, dl[n].x);
             ScaleToOne(temp.data(), (int)(temp.rows() * temp.cols()));
 
-            //#ifdef LOGPOLAR
-            //            ConvertToLogPolar(temp, m[0], lpsm);
-            //#else
-            //            m[0] = temp;
-            //#endif
+
+
+            #ifdef LOGPOLAR
             for (MatrixManipulator mm(temp, INPUT_ROWS, INPUT_COLS); !mm.isDone(); mm.next())
             {
                m[0] = mm.get();
+            #else
+               m[0] = temp;
+            #endif
 
                for (int i = 0; i < ConvoLayerList.size(); i++) {
                   m = ConvoLayerList[i]->Eval(m);
-                  clveo_write(i, m);
                }
 
                ColVector cv;
                cv = LayerList[0]->Eval(m[0].col(0));
-               lveo_write(0, cv);
                for (int i = 1; i < LayerList.size(); i++) {
                   cv = LayerList[i]->Eval(cv);
-                  lveo_write(i, cv);
                }
 
                if (retry == 0) {
@@ -2799,29 +2618,26 @@ void Train(int nloop, string dataroot, double eta, int load)
 
                vector_of_matrix vm_backprop(1);
                RowVector g = loss->LossGradient();
-               lvgo_write(LayerList.size(), g);
                for (int i = (int)LayerList.size() - 1; i >= 0; --i) {
                   if (i == 0) {
                      vm_backprop[0] = LayerList[i]->BackProp(g);
-                     clvgo_write(i, vm_backprop); // Debug
                   }
                   else {
                      g = LayerList[i]->BackProp(g);
-                     lvgo_write(i, g); // Debug
                   }
                }
 
                for (int i = (int)ConvoLayerList.size() - 1; i >= 0; --i) {
                   if (i == 0) {
                      ConvoLayerList[i]->BackProp(vm_backprop, false);
-                     clvgo_write(i, dynamic_pointer_cast<FilterLayer2D>(ConvoLayerList[i])->dW);  // Debug
                   }
                   else {
                      vm_backprop = ConvoLayerList[i]->BackProp(vm_backprop);
-                     clvgo_write(i, vm_backprop); // Debug
                   }
                }
+            #ifdef LOGPOLAR
             }
+            #endif
 #ifdef SGD
             // This is stoastic descent.  It is inside the batch loop.
             for (auto lli : ConvoLayerList) {
@@ -3157,7 +2973,6 @@ void Train1(int nloop, string dataroot, double eta, int load)
 
             for (int i = 0; i < ConvoLayerList.size(); i++) {
                m = ConvoLayerList[i]->Eval(m);
-               clveo_write(i, m);
             }
 
             ColVector cv;
@@ -3363,14 +3178,14 @@ void MakeLogPolar(string name1, string name_out)
    Matrix m = ReadImage( name1 );
    ScaleToOne(m.data(), (int)(m.rows() * m.cols()));
 
-   Matrix lp1(INPUT_ROWS, INPUT_COLS);
+   Matrix lp1(32, 38);
 
    LogPolarSupportMatrix lpsm = PrecomputeLogPolarSupportMatrix(m.rows(), m.cols(), lp1.rows(), lp1.cols());
 
    ConvertToLogPolar(m, lp1, lpsm);
 
    OMultiWeightsBMP oo(path, name_out);
-   oo.Write(lp1, 0);
+   oo.Write(lp1.block(0,5,32,32), 0);
 }
 
 void CompareLogPolar(string name1, string name2, string name_out)
@@ -3436,7 +3251,7 @@ void Correlate(string name1, string name2, string name_out)
 
 void MakeSpectrum(ColVector& x, ColVector& s)
 {
-   const int N = x.size();
+   const int N = (const int)x.size();
    const int N2 = N >> 1;
 
    rfftsine(x.data(), N, 1);
@@ -3518,7 +3333,7 @@ void TestFourierLayer()
 
 
 
-   rfftsine(X.data(), X.size(), -1);
+   rfftsine(X.data(), (const int)X.size(), -1);
 
    ofstream os(path + "\\spec.csv");
    for (int i = 0; i < S.size(); i++) {
@@ -3538,15 +3353,6 @@ void TestFourierLayer()
    ofstream os1(path + "\\dsdx.csv");
    os1 << J;
 }
-
-//NOTE:
-//      Momentum currently implemented.  When momentum is implemented it means that the current
-//      dW has to be stashed as well (to be accurate) or dW at least has to be zeroed when
-//      the Stash is applied because the Count parameter is not used.  Momentum uses a low pass filter
-//      instead of averaging, which itself is a waste of cycles when Stoccastic Descent is used.
-//      !!! To turn on momentum define MOMENTUM . !!
-//      !!!   MOMENTUM currently defined for this project.  !!!
-//      Would be interesting to do a comparison of error curve with and without momentum.
 
 int main(int argc, char* argv[])
 {
