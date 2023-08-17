@@ -1,8 +1,12 @@
 // algors.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
+//#define USE_THREAD_POOL
+//#define EIGEN_DONT_PARALLELIZE
 #include <Eigen>
-//#include <CXX11\\Tensor>
-//#include <CXX11\\ThreadPool>
+#ifdef USE_THREAD_POOL
+   #include <CXX11\\Tensor>
+   #include <CXX11\\ThreadPool>
+#endif
 #include <iostream>
 #include <iomanip>
 #include <MNISTReader.h>
@@ -23,6 +27,9 @@
 #include <opencv2\\core.hpp>
 #include <opencv2\\highgui.hpp>
 #include <opencv2\\imgproc.hpp>
+
+#include <SpacialTransformer.h>
+#include <CyclicVectorTransformer.h>
 
 string path = "C:\\projects\\neuralnet\\simplenet\\algors\\results";
 
@@ -883,6 +890,29 @@ void TestKernelFlipper2()
    cin >> c;
 }
 
+void MakeCenterPlus(Matrix& m, int size)
+{
+   // Is this a better way to arrange shapes around zero?
+   // Start with range of -1 to 1 over the number of points in the matrix row or col.  Zero may or may not be one of the elements.
+   // Then multiply by half the row or col value.
+   //const Eigen::ArrayXf grid_x = Eigen::ArrayXf::LinSpaced(output_width, -1.0f, 1.0f) * static_cast<float>(input_width_ - 1) / 2.0f;
+   //const Eigen::ArrayXf grid_y = Eigen::ArrayXf::LinSpaced(output_height, -1.0f, 1.0f) * static_cast<float>(input_height_ - 1) / 2.0f;
+
+   int nn = m.rows();
+   int mm = m.cols();
+   runtime_assert(size <= nn && size <= mm);
+
+   m.setConstant(0.0);
+
+   int n2 = nn >> 1; if (!(nn % 2)) { n2--; }
+   int m2 = mm >> 1; if (!(mm % 2)) { m2--; }
+
+   int no = (nn - size) >> 1;
+   int mo = (mm - size) >> 1;
+   m.block(no, m2, size, 1).setConstant(1.0);
+   m.block(n2, mo, 1, size).setConstant(1.0);
+}
+
 void MakeCenterCircle(Matrix& m, double rad)
 {
    int n = m.rows();
@@ -1532,11 +1562,31 @@ private:
 };
 */
 
+void EnviOut(char* name)
+{
+   char* value = nullptr;
+   std::size_t size;
+   errno_t error = _dupenv_s(&value, &size, name);
+   if (error == 0 && value != nullptr) {
+      std::cout << "The value of " << name << " is: " << value << std::endl;
+      free(value);
+   }
+   else {
+      std::cout << name << " is not set." << std::endl;
+   }
+}
+
 void FastMath()
 {
    ColVector z(1000);
    ColVector x(1000);
    Matrix m(1000, 1000);
+
+   EnviOut("OMP_NUM_THREADS");
+   EnviOut("OMP_PROC_BIND");
+   EnviOut("OMP_SCHEDULE");
+   EnviOut("OMP_NESTED");
+   cout << "Eigen threads:" << Eigen::nbThreads() << endl;
 
    char c;
    cout << "Ready? Hit a key." << endl;
@@ -1548,31 +1598,33 @@ void FastMath()
       m(i, i) = i;
    }
 
-   //Eigen::ThreadPool pool(4);
-   //Eigen::ThreadPoolDevice dev(&pool, 4);
+
+
+
+   //cout << "Using " << omp_get_max_threads() << " threads." << endl;
 
    auto start_time = std::chrono::high_resolution_clock::now();
+#ifdef USE_THREAD_POOL
+   Eigen::ThreadPool pool(4);
+   Eigen::ThreadPoolDevice dev(&pool, 4);
 
-   //Eigen::TensorOpCost toc = Eigen::TensorOpCost(m.size(), m.size(), m.size());
-  // dev.parallelFor(m.rows(), toc, [&](Eigen::Index a, Eigen::Index b) {
+
+   Eigen::TensorOpCost toc = Eigen::TensorOpCost(m.size(), m.size(), m.size());
+   dev.parallelFor(m.rows(), toc, [&](Eigen::Index a, Eigen::Index b) {
       //cout << a << "," << b << endl;
-      //z.block(a, 0, b - a, 1) = m.block(a, 0, b - a, m.cols()) * x;
-      //for (int i = a; i < b; i++) {
-      //   z(i) = m.row(i) * x;
-      //}
-//      });
-
-   cout << Eigen::nbThreads() << endl;
-
-   for (int i = 0; i < 10; i++) {
+      z.block(a, 0, b - a, 1) = m.block(a, 0, b - a, m.cols()) * x;
+      });
+#else
+   for (int i = 0; i < 1000; i++) {
+      //cout << Eigen::nbThreads() << endl;
       z = m * x;
    }
-
+#endif
    auto end_time = std::chrono::high_resolution_clock::now();
    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
    std::cout << "Duration: " << duration_ms.count() << " ms" << std::endl;
 
-   cout << z.block(0,0,10,1) << endl;
+   //cout << z.block(0,0,10,1) << endl;
 
    // Use the thread pool to parallelize the multiplication
    //pool.(0, matrix.rows(), [&](int i) {
@@ -1582,10 +1634,331 @@ void FastMath()
 
 }
 
+// Test spacial transformer
+void test_transformer()
+{
+   const SpacialTransformer::Size size_in(28, 28);
+   const SpacialTransformer::Size size_out(28, 28);
+   Matrix shape(size_in.rows, size_in.cols);
+   Matrix out(size_out.rows, size_out.cols);
+
+   MakeCenterPlus(shape, 10.0);
+
+   ColVector t(6);
+   t.setZero();
+
+   // Layout
+   //   0     1      4
+   //   2     3      5
+   t(0) = 1.25;
+   t(1) = 0.0;
+   t(2) = 0.0;
+   t(3) = 1.25;
+   /*
+   t(0) = cos(M_PI * 45.0 / 180.0); // 1;
+   t(1) = -sin(M_PI * 45.0 / 180.0);
+   t(2) = sin(M_PI * 45.0 / 180.0);
+   t(3) = cos(M_PI * 45.0 / 180.0); // 1;
+   */
+   t(4) = 0.0;  // Traslate in the colunm direction.
+   t(5) = 0.0;
+   
+   SpacialTransformer st(size_in, size_out);
+
+   st.Eval(shape, out, t);
+
+   OWeightsCSVFile fcsv(path, "transformer");
+   MakeMatrixImage(path + "\\transformer_in.bmp", shape);
+   MakeMatrixImage(path + "\\transformer_out.bmp", out);
+   fcsv.Write(shape, 0);
+   fcsv.Write(out, 1);
+
+   // Test Backprop.
+   // Using out as dV.
+   // out.setConstant(1.0);
+   // RowVector dt = st.BackpropGrid(out);
+   // cout << dt << endl;
+
+   //out.setZero();
+   //out(14, 14) = 1.0;
+
+   //shape = st.BackpropSampler(out);
+   //cout << shape << endl;
+}
+
+#define COMPUTE_LOSS {\
+   st.Eval(shape, out, t);\
+   vom_in[0] = out;\
+   vom_out = flat.Eval(vom_in);\
+   e = loss.Eval(vom_out[0].col(0), label);\
+}
+
+void TestTransformerGradComp()
+{
+
+   const SpacialTransformer::Size size_in(28, 28);
+   const SpacialTransformer::Size size_out(28, 28);
+   Matrix shape(size_in.rows, size_in.cols);
+   Matrix out(size_out.rows, size_out.cols);
+
+   Flatten2D flat(iConvoLayer::Size(size_out.rows, size_out.cols), 1);
+   LossL2 loss(size_out.rows * size_out.cols, 1);
+
+   ColVector label(size_out.rows * size_out.cols);
+   label.setZero();
+
+   vector_of_matrix vom_in(1);
+   vector_of_matrix vom_out(1);
+
+   ColVector vv;
+
+   double e;
+   double f1, f2;
+
+   shape.setRandom();
+
+   ColVector t(6);
+   t.setZero();
+
+   // Layout
+   //   0     1      4
+   //   2     3      5
+   t(0) = 1;
+   t(1) = 0;
+   t(2) = 0;
+   t(3) = 1;
+   t(4) = 0.5;  // Traslate in the col direction.
+   t(5) = 0.5;
+
+   SpacialTransformer st(size_in, size_out);
+
+   // Test Sample Gradient  (U to V)
+   
+   Matrix dif(size_out.rows, size_out.cols);
+   dif.setZero();
+
+   for (int r = 0; r < size_out.rows; r++) {
+      std::cout << ".";
+      for (int c = 0; c < size_out.cols; c++) {
+         double eta = 1.0e-5;
+
+         double w1 = shape(r, c);
+         //----- Eval ------
+         shape(r, c) = w1 - eta;
+         COMPUTE_LOSS
+         f1 = e;
+
+         shape(r, c) = w1 + eta;
+         COMPUTE_LOSS
+         f2 = e;
+
+         shape(r, c) = w1;
+
+         dif(r, c) = (f2 - f1) / (2.0 * eta);
+      }
+   }
+
+   COMPUTE_LOSS
+   vector_of_matrix vb(1);
+   RowVector gg = loss.LossGradient();
+   vom_in[0] = gg;
+   vb = flat.BackProp(vom_in);
+
+   vom_out[0] = st.BackpropSampler(vb[0]);
+
+   OWeightsCSVFile fcsv(path, "samp_grad");
+   fcsv.Write(dif, 0);
+   fcsv.Write(vom_out[0], 1);
+
+
+   cout << "Du//Dv max coeff: " << (dif - vom_out[0]).maxCoeff() << endl;
+   
+
+   ColVector tdif(6);
+
+   for (int i = 0; i < 6; i++) {
+      double eta = 1.0e-5;
+
+      double w1 = t(i);
+      //----- Eval ------
+      t(i) = w1 - eta;
+      COMPUTE_LOSS
+      f1 = e;
+
+      t(i) = w1 + eta;
+      COMPUTE_LOSS
+      f2 = e;
+
+      t(i) = w1;
+
+      tdif(i, 0) = (f2 - f1) / (2.0 * eta);
+
+   }
+
+   COMPUTE_LOSS
+
+   vector_of_matrix vm_backprop(1);
+   RowVector g = loss.LossGradient();
+   vom_in[0] = g;
+   vm_backprop = flat.BackProp(vom_in);
+
+   g = st.BackpropGrid(vm_backprop[0]);
+
+   cout << "fintie dif: " << tdif.col(0).transpose() << endl
+      << "analog dif: " << g << endl;
+
+   tdif -= g.transpose();
+   tdif.cwiseAbs();
+   cout << "abs differ: " << tdif.col(0).transpose() << endl;
+
+
+   cout << "enter a key and press Enter" << endl;
+   char c;
+   cin >> c;
+}
+#undef COMPUTE_LOSS
+
+#define COMPUTE_LOSS {\
+   st.Eval(shape, out, t);\
+   e = loss.Eval(out, label);\
+}
+
+void TestCyclicTransformerGradComp()
+{
+   int size_in = 28;
+   int size_out = 32;
+   ColVector shape(size_in);
+   ColVector out(size_out);
+
+   LossL2 loss(size_out, 1);
+
+   ColVector label(size_out);
+   label.setZero();
+
+   double e;
+   double f1, f2;
+
+   shape.setRandom();
+
+   double t = 2.5;
+
+   CyclicVectorTransformer st(size_in, size_out);
+
+   // Test Sample Gradient  (U to V)
+
+   RowVector dif(size_in);
+   dif.setZero();
+
+   for (int r = 0; r < size_in; r++) {
+      std::cout << ".";
+
+      double eta = 1.0e-5;
+
+      double w1 = shape(r);
+      //----- Eval ------
+      shape(r) = w1 - eta;
+      COMPUTE_LOSS
+      f1 = e;
+
+      shape(r) = w1 + eta;
+      COMPUTE_LOSS
+      f2 = e;
+
+      shape(r) = w1;
+
+      dif(r) = (f2 - f1) / (2.0 * eta);
+   }
+
+   COMPUTE_LOSS
+   RowVector gg = loss.LossGradient();
+
+   gg = st.BackpropSampler(gg);
+
+   OWeightsCSVFile fcsv(path, "samp_grad");
+   fcsv.Write(dif, 0);
+   fcsv.Write(gg, 1);
+
+
+   cout << "Du//Dv error max coeff: " << (dif - gg).maxCoeff() << endl;
+
+
+   double tdif;
+
+   double eta = 1.0e-5;
+
+   double w1 = t;
+   //----- Eval ------
+   t = w1 - eta;
+   COMPUTE_LOSS
+   f1 = e;
+
+   t = w1 + eta;
+   COMPUTE_LOSS
+   f2 = e;
+
+   t = w1;
+
+   tdif = (f2 - f1) / (2.0 * eta);
+
+
+   COMPUTE_LOSS
+
+   RowVector g = loss.LossGradient();
+   g = st.BackpropGrid(g);
+
+   cout << "fintie dif: " << tdif << endl
+      << "analog dif: " << g(0) << endl;
+
+   cout << "enter a key and press Enter" << endl;
+   char c;
+   cin >> c;
+}
+
+void TestCyclicTransform()
+{
+   int size_in = 28;
+   int size_out = 16;
+   ColVector shape(size_in);
+   ColVector out(size_out);
+
+   Matrix temp(size_in, size_in);
+   MakeCenterGaussian(temp, 5);
+   shape = temp.col(size_in >> 1);
+
+
+   CyclicVectorTransformer st(size_in, size_out);
+
+
+   OWeightsCSVFile fcsv(path, "cyc_xform");
+   fcsv.Write(shape, 0);
+
+   st.Eval(shape, out, 3.5);
+   fcsv.Write(out, 1);
+
+   st.Eval(shape, out, 5.75);
+   fcsv.Write(out, 2);
+
+   st.Eval(shape, out, 10.35);
+   fcsv.Write(out, 3);
+
+   st.Eval(shape, out, -5.75);
+   fcsv.Write(out, 4);
+
+   st.Eval(shape, out, -49.0);
+   fcsv.Write(out, 5);
+}
+
 int main()
 
 {
     std::cout << "Algorithm Tester!\n";
+    //test_transformer();
+    //TestTransformerGradComp();
+    //TestCyclicTransformerGradComp();
+    TestCyclicTransform();
+    return 0;
+    //ColVector test;
+    //test = ColVector::LinSpaced(11, -1.0, 1.0) * ((11 - 1) / 2.0);
 
     //ShiftExperiment();
     //return 1;

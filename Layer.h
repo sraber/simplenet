@@ -340,6 +340,9 @@ public:
       N2[chn] = B2 * N2[chn] + (1.0 - B2) * idB * idB;
    }
    Matrix& WeightGrad(int chn) { 
+      // REVIEW: Count could be removed by keeping two varaibles that accumulate the 
+      //         power.  
+      //         B1P = B1P * B1;  Initialize B1P to 1.
       double b1 = 1.0 - std::pow(B1, Count);
       double b2 = 1.0 - std::pow(B2, Count);
 
@@ -434,7 +437,7 @@ public:
 class IWeightsToNormDist : public iGetWeights {
    double StdDev;
    int Channels;
-
+   double Bias;
    /*
    Delving Deep into Rectifiers:
 Surpassing Human-Level Performance on ImageNet Classification
@@ -452,13 +455,13 @@ public:
       Xavier,
       Kaiming
    };
-   IWeightsToNormDist(double std_dev) : StdDev(std_dev), Channels(-1) {
+   IWeightsToNormDist(double std_dev, double bias) : StdDev(std_dev), Channels(-1), Bias(bias) {
       // Not used in this mode but we should init fstdv to something.
       fstdv = stdv_Xavier;
    }
    // Xavier recommended for Tanh activation function.
    // Kaiming recommended for ReLu and Sigmoid.
-   IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0), Channels(channels) {
+   IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0), Channels(channels), Bias(0.0) {
       switch(init_type) {
          case Xavier:      fstdv = stdv_Xavier; break;
          case Kaiming:     fstdv = stdv_Kaiming; break;
@@ -479,7 +482,7 @@ public:
       }
    }
    void ReadConvoBias(Matrix& w, int k) {
-      w.setConstant(0.0);
+      w.setConstant(Bias);
    }
    void ReadFC(Matrix& w){
       double stdv = StdDev < 0.0 ? sqrt(2.0 / (double)w.cols()) :  StdDev;
@@ -491,8 +494,7 @@ public:
             w(r, c) = distribution(generator);
          }
       }
-      // The bias is always set to zero.
-      w.rightCols(1).setConstant(0.0);
+      w.rightCols(1).setConstant(Bias);
    }
 };
 
@@ -768,14 +770,31 @@ public:
       double sum = 0.0;
       for (int i = 0; i < Size; i++) { q(i) = exp( q(i) ); }
       sum = q.sum();
-      q /= sum;
+      // NOTE: Use L'Hopital's rule.
+      //       S = x0 + x1 .. + xi + .. xN
+      //       xi = S - x0 - x1 - ... - xN
+      //       Lim as S -> 0 of xi / S = (d xi / dS) / (d S / dS) = 1 / 1
+      //
+      if (sum <= std::numeric_limits<double>::epsilon()) {
+         q.setOnes();
+      }
+      else {
+         q /= sum;
+      }
+
       return q;
    }
    ColVector Eval(Eigen::Map<ColVector>& q) {
       double sum = 0.0;
       for (int i = 0; i < Size; i++) { q(i) = exp( q(i) ); }
       sum = q.sum();
-      q /= sum;
+      //if (sum <= std::numeric_limits<double>::epsilon()) {
+      // q has to sum to one.  Only one element can be set to 1.
+      //   q.setOnes();
+      //}
+      //else {
+         q /= sum;
+      //}
       return q;
    }
 
@@ -805,6 +824,7 @@ public:
    }
    actLinear() : Size(0) {}
    void Resize(int size) {
+      Size = size;
       J.resize(size);
       J.setOnes();
    }
@@ -940,6 +960,7 @@ public:
          props.insert({ "ID", CBObj(id) });
          props.insert({ "X", CBObj(X) });
          props.insert({ "W", CBObj(W) });
+         props.insert({ "dC", CBObj(child_grad) });
          props.insert({ "dG", CBObj(delta_grad) });
          props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
          props.insert({ "idW", CBObj(iter_w_grad) });
@@ -1004,7 +1025,6 @@ public:
    // The values may be the convolution prior to activation or something else.  The activation
    // objects use the fly-weight pattern and this is the storage for that.
    vector_of_matrix Z;
-   vector_of_matrix Aux;
    unique_ptr<iActive> pActive;
    bool NoBias;
    enum CallBackID { EvalPreActivation, EvalPostActivation, Backprop1, Backprop2 };
@@ -1065,7 +1085,6 @@ public:
       }
 
       for (Matrix& m : Z) { m.resize(output_size.rows, output_size.cols); }
-      for (Matrix& m : Aux) { m.resize(output_size.rows, output_size.cols); }
    }
 
    ~FilterLayer2D() {}
@@ -1469,7 +1488,6 @@ public:
 
       vector_of_matrix::iterator im = child_grad.begin();
       vector_of_matrix::iterator iz = Z.begin();
-      //vector_of_matrix::iterator ia = Aux.begin();
       int weight_matrix_count = 0;
       int filter_count = 0;
       for (; im != child_grad.end(); im++, iz++, filter_count++) {
@@ -1484,16 +1502,13 @@ public:
             pOptomizer->BackpropBias(iter_dB, filter_count);
          }
 
-         //REVIEW: There are potentially multiple dW per input channel.  The aux matrix tells how to 
-         //        divide the incomming error matrix into them.
-         //         Nope.  It doesn't.
          double div = 1.0 / (double)Channels;
          for (int chn = 0; chn < Channels; chn++) {
-            // Each Aux matrix carries the fractional portion of the contribution
-            // that each filter matrix contributed to the Z matrix, which is a sum
-            // total of a filter kernel correlated with an input channel.
-            // Above is wrong.
-            // Just divide the gradent equally into each channel matrix.
+            // The convolution volume has a depth equal to the number of input channels
+            // and is completed by summing the channel convolutions into one output channel.
+            // Backpropagation must now figure out how to propagate a single error gradient
+            // back through each of the source channels.
+            // Here we simply divide the gradent equally into each channel matrix.
             m_chan_delta_grad = div * m_delta_grad;
 
 
@@ -1521,7 +1536,7 @@ public:
                props.insert({ "cdG", CBObj(*im) }); // Kernel
                props.insert({ "dG", CBObj(m_delta_grad) });
                props.insert({ "idW", CBObj(iter_dW) });
-               props.insert({ "dW", CBObj(pOptomizer->WeightGrad()) });
+               props.insert({ "dW", CBObj(pOptomizer->WeightGrad(chn)) });
                BackpropCallBack->Properties( props );
             }
 
@@ -2321,8 +2336,8 @@ public:
    RowVector LossGradient(void) {
       //RowVector g(Size);
       for (int i = 0; i < Size; i++) {
-         if (X[i] == 0.0 ) {
-            if (Y[i] == 0.0) {
+         if (X[i] <= std::numeric_limits<double>::epsilon() ) {
+            if (Y[i] <= std::numeric_limits<double>::epsilon() ) {
                G[i] = 0.0;
             }
             else {

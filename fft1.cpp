@@ -129,7 +129,7 @@ return ((n) > 0 && !((n) & (n-1)));
 }
 
 // NOTE: See std::bit_floor( T x) implemented in C++20
-unsigned nearest_power_floor(unsigned x) {
+unsigned int nearest_power_floor(unsigned int x) {
    if (IsPower2(x)) {
       return x;
    }
@@ -139,7 +139,7 @@ unsigned nearest_power_floor(unsigned x) {
 }
 
 // NOTE: See std::bit_ceil( T x) implemented in C++20
-unsigned nearest_power_ceil(unsigned x) {
+unsigned int nearest_power_ceil(unsigned int x) {
    if (IsPower2(x)) {
       return x;
    }

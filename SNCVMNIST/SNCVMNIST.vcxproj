@@ -165,11 +165,13 @@
     <ClCompile Include="..\fft1.cpp" />
     <ClCompile Include="..\fft2convo.cpp" />
     <ClCompile Include="..\fftn.cpp" />
+    <ClCompile Include="..\LogPolar.cpp" />
     <ClCompile Include="..\utility.cpp" />
     <ClCompile Include="SNCVMNIST.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Layer.h" />
+    <ClInclude Include="..\LogPolar.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

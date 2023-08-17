@@ -371,3 +371,6 @@ FodyWeavers.xsd
 /SNCVMNIST/weights/LP1C4
 *.jpg
 /SNCVMNIST/weights/LP2/run notes.txt
+/SNBranchMNIST/weights/localizer_training.dat
+/LP Lena scale study.docx
+/Spacial Transformer Class.docx

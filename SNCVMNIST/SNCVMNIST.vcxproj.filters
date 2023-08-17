@@ -33,9 +33,15 @@
     <ClCompile Include="..\fftn.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\LogPolar.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Layer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\LogPolar.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

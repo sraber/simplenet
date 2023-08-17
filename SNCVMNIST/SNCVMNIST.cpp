@@ -33,7 +33,9 @@
 #include <map>
 
 #include <utility.h>
-//#include <Windows.h>
+#include <conio.h>
+
+#include <LogPolar.h>
 
    // Define static optomizer variables.
 double optoADAM::B1 = 0.0;
@@ -48,6 +50,13 @@ layer_list LayerList;
 shared_ptr<iLossLayer> loss;
 string path = "C:\\projects\\neuralnet\\simplenet\\SNCVMNIST\\weights";
 string model_name = "layer";
+
+int getch_noblock() {
+   if (_kbhit())
+      return _getch();
+   else
+      return -1;
+}
 
 class myAveFlattenCallBack : public iCallBackSink
 {
@@ -643,179 +652,7 @@ void ScalePerLeNet98(double* pdata, int size)
    }
 }
 
-typedef std::vector < std::vector< std::tuple<int, int, int, int, double, double>>> LogPolarSupportMatrix;
 
-struct LogPolarSupportMatrixCenter
-{
-   double row_center;
-   double col_center;
-   double rad_max;
-};
-
-LogPolarSupportMatrix PrecomputeLogPolarSupportMatrix(int in_rows, int in_cols, int out_rows, int out_cols, LogPolarSupportMatrixCenter* pcenter = NULL) 
-{
-   LogPolarSupportMatrix lpsm;
-   lpsm.resize(out_rows, std::vector<std::tuple<int, int, int, int, double, double>>(out_cols));
-   
-   //                   if in_rows      odd              even
-   double r_center = in_rows % 2 ? in_rows >> 1 : (in_rows >> 1) - 0.5;
-   double c_center = in_cols % 2 ? in_cols >> 1 : (in_cols >> 1) - 0.5;
-
-   // NOTE: The radius will fit in the smaller of the two dimentions.
-   //       if the shape is rectangular then some of the shape will not be sampled.
-   //       To do it the other way the code must check for less than zero and greater then rows or cols
-   double rad_max = r_center < c_center ? r_center : c_center;
-   const double da = 2.0 * M_PI / (double)out_rows; // Here, we don't want to reach 2 PI
-
-   if (pcenter != NULL) {
-      pcenter->row_center = r_center;
-      pcenter->col_center = c_center;
-      pcenter->rad_max = rad_max;
-   }
-
-   // at x = 0, y = log(0.5)
-   // at x = rows - 1, y = log(rad)
-   // dy / dx = (log(rad) - log(0.5)) / rows-1
-   // b = log(0.5)
-   // NOTE: It doesn't matter what log base is used.  The sample points on the linear scale come out the same.
-   //       Different log bases give different scale curves but of the same shape and it is this shape that
-   //       is mapped to the range rad_max.  When the log scale points are trasformed to linear positions
-   //       the sample positions are the same no matter the base of the log.
-   const double dp = (std::log(rad_max) - std::log(0.5)) / (double)(out_cols - 1); // Here we do want to reach log(rad_max).
-   const double  b = std::log(0.5);
-
-   ColVector rd(out_cols);
-   for (int c = 0; c < out_cols; c++) {
-      double p = (double)c * dp + b;
-      rd(c) = exp(p);
-   }
-
-   for (int r = 0; r < out_rows; r++) {
-      double a = (double)r * da; // Angle
-      for (int c = 0; c < out_cols; c++) {
-         // REVIEW: Could use trig recursion formula to speed 
-         //         sin and cos computations.
-         double rr = -rd(c) * sin(a) + r_center;
-         double cc =  rd(c) * cos(a) + c_center;
-         //cout << p << "," << a << "," << x << "," << y << endl;
-         if (rr < 0.0) { rr = 0.0; }
-         if (cc < 0.0) { cc = 0.0; }
-
-         if (rr > (in_rows - 1)) { rr = in_rows - 1; }
-         if (cc > (in_cols - 1)) { cc = in_cols - 1; }
-
-         //runtime_assert(rr >= 0.0 && cc >= 0.0);
-
-         int rl = floor(rr);
-         int rh = ceil(rr);
-         int cl = floor(cc);
-         int ch = ceil(cc);
-
-         /*
-         if (xl > 27) { cout << "xl: " << xl; xl = 27; }
-         if (xh > 27) { cout << "xh: " << xh; xh = 27; }
-         if (yl > 27) { cout << "yl: " << yl; yl = 27; }
-         if (yh > 27) { cout << "yh: " << yh; yh = 27; }
-         */
-
-         double rp = rr - (double)rl;
-         double cp = cc - (double)cl;
-
-         lpsm[r][c] = std::tuple<int, int, int, int, double, double>(rl, rh, cl, ch, rp, cp);
-      }
-   }
-   return lpsm;
-}
-
-
-void ConvertToLogPolar(Matrix& m, Matrix& out, LogPolarSupportMatrix& lpsm )
-{
-   int rows = out.rows();
-   int cols = out.cols();
-
-   for (int r = 0; r < rows; r++) {
-      for (int c = 0; c < cols; c++) {
-         const tuple<int, int, int, int, double, double>& t = lpsm[r][c];
-         const int rl = std::get<0>(t);
-         const int rh = std::get<1>(t);
-         const int cl = std::get<2>(t);
-         const int ch = std::get<3>(t);
-         const double rr = std::get<4>(t);
-         const double cc = std::get<5>(t);
-
-         double a00 = m(rl, cl);
-         double a10 = m(rh, cl) - a00;
-         double a01 = m(rl, ch) - a00;
-         double a11 = m(rh, ch) - a00 - a10 - a01;
-         out(r, c) = a00 + a10 * rr + a01 * cc + a11 * rr * cc;
-      }
-   }
-
-}
-
-void ConvertLogPolarToCart(const Matrix& m, Matrix& out, LogPolarSupportMatrixCenter lpsmc )
-{
-   int out_rows = out.rows();
-   int out_cols = out.cols();
-   int in_rows = m.rows();
-   int in_cols = m.cols();
-
-   double row_cen = lpsmc.row_center;
-   double col_cen = lpsmc.col_center;
-   double p_max = lpsmc.rad_max;
-
-   const double da = 2.0 * M_PI / (double)in_rows; // Here, we don't want to reach 2 PI
-   // at x = 0, y = log(0.5)
-   // at x = rows - 1, y = log(rad)
-   // dy / dx = (log(rad) - log(0.5)) / rows-1
-   // b = log(0.5)
-   const double dp = (std::log(p_max) - std::log(0.5)) / (double)(in_cols-1); // Here we do want to reach log(dia).
-   const double  b = std::log(0.5);
-
-   out.setZero();
-
-   for (int r = 0; r < out_rows; r++) {
-      //double rr = r - row_cen - 1;
-      double rr =  row_cen - r;
-      for (int c = 0; c < out_cols; c++) {
-         double cc = c - col_cen;
-         double p = std::sqrt(rr*rr+cc*cc);
-         if (p < 1) {
-            p = 0.5;
-         }
-         double a = atan2(rr,cc);
-         if (a < 0) {
-            a = 2.0 * M_PI + a;
-         }
-
-         double in_r = a / da;
-         // this is how radius was computed going from
-         // cartesian to LP
-         // rad = (double)c * dp + b;
-         //
-         // Now, given rad (p) find c.
-         double in_c = (std::log(p) - b) / dp;
-
-         //cout << p << "," << a << " | " << in_c << "," << in_r << endl;
-
-         int rl = floor(in_r);     if (rl >= in_rows) { rl = in_rows - 1; }
-         int rh = ceil(in_r);      if (rh >= in_rows) { rh = in_rows - 1; }
-         int cl = floor(in_c);     if (cl >= in_cols) { cl = in_cols - 1; }
-         int ch = ceil(in_c);      if (ch >= in_cols) { ch = in_cols - 1; }
-
-         double rp = in_r - (double)rl;
-         double cp = in_c - (double)cl;
-
-         double a00 = m(rl, cl);
-         double a10 = m(rh, cl) - a00;
-         double a01 = m(rl, ch) - a00;
-         double a11 = m(rh, ch) - a00 - a10 - a01;
-
-         out(r, c) = a00 + a10 * rp + a01 * cp + a11 * rp * cp;
-      }
-   }
-
-}
 
 void TrasformMNISTtoMatrix(Matrix& m, ColVector& x)
 {
@@ -2662,6 +2499,11 @@ void Train(int nloop, string dataroot, double eta, int load)
          err_out.Write(stat_class.Correct);
          cout << "count: " << loop << "\terror:" << left << setw(9) << std::setprecision(4) << e << "\tcorrect: " << stat_class.Correct << "\tincorrect: " << stat_class.Incorrect << endl;
          stat_class.Reset();
+
+         char c = getch_noblock();
+         if (c == 'x' || c == 'X') {
+            goto TESTJMP;
+         }
       }
       /*if (!(loop % 1000)) {
          MNISTReader reader1(dataroot + "\\test\\t10k-images-idx3-ubyte",
@@ -3178,14 +3020,29 @@ void MakeLogPolar(string name1, string name_out)
    Matrix m = ReadImage( name1 );
    ScaleToOne(m.data(), (int)(m.rows() * m.cols()));
 
-   Matrix lp1(32, 38);
+   Matrix lp1(32, 32);
 
    LogPolarSupportMatrix lpsm = PrecomputeLogPolarSupportMatrix(m.rows(), m.cols(), lp1.rows(), lp1.cols());
 
    ConvertToLogPolar(m, lp1, lpsm);
 
    OMultiWeightsBMP oo(path, name_out);
-   oo.Write(lp1.block(0,5,32,32), 0);
+   oo.Write(lp1,0);
+
+   ofstream oof(path + "//" + name_out + ".0.csv");
+   oof << lp1;
+   oof.close();
+
+   lpsm = PrecomputeLogPolarSupportMatrix1(m.rows(), m.cols(), lp1.rows(), lp1.cols());
+
+
+
+   ConvertToLogPolar(m, lp1, lpsm);
+   oo.Write(lp1, 1);
+
+   oof.open(path + "//" + name_out + ".1.csv");
+   oof << lp1;
+   oof.close();
 }
 
 void CompareLogPolar(string name1, string name2, string name_out)

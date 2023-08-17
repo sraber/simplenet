@@ -143,7 +143,7 @@ public:
 #endif
    }
 #else
-   double MultiplyBlock(Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
+   double MultiplyBlock(const Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
    {
       double sum = 0.0;
       for (int r = 0; r < size_r; r++) {
@@ -154,7 +154,7 @@ public:
       return sum;
    }
 
-   double MultiplyBlockWithEigen(Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
+   double MultiplyBlockWithEigen(const Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
    {
       double sum = (m.array().block(mr, mc, size_r, size_c) * h.array().block(hr, hc, size_r, size_c)).sum();
 
@@ -243,7 +243,7 @@ public:
       return Z;
    }
 
-   // Figure out how many output gradiens there are.  There will be the same or less out going 
+   // Figure out how many output gradients there are.  There will be the same or less out going 
    // than in-comming.  Accumulate in-comming gradients into outgoing.
    // There is input_channels*kernel_number in-comming.
    // There are input_channels out-going.
