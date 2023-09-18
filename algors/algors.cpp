@@ -1637,8 +1637,10 @@ void FastMath()
 // Test spacial transformer
 void test_transformer()
 {
-   const SpacialTransformer::Size size_in(28, 28);
-   const SpacialTransformer::Size size_out(28, 28);
+   const Size size_in(28, 28);
+   //const Size size_out(28, 28);
+   int waste = 0;
+   const Size size_out(32, 32 - waste);
    Matrix shape(size_in.rows, size_in.cols);
    Matrix out(size_out.rows, size_out.cols);
 
@@ -1650,22 +1652,40 @@ void test_transformer()
    // Layout
    //   0     1      4
    //   2     3      5
+   /*
    t(0) = 1.25;
    t(1) = 0.0;
    t(2) = 0.0;
    t(3) = 1.25;
-   /*
+   */
+
    t(0) = cos(M_PI * 45.0 / 180.0); // 1;
    t(1) = -sin(M_PI * 45.0 / 180.0);
    t(2) = sin(M_PI * 45.0 / 180.0);
    t(3) = cos(M_PI * 45.0 / 180.0); // 1;
-   */
-   t(4) = 0.0;  // Traslate in the colunm direction.
-   t(5) = 0.0;
-   
-   SpacialTransformer st(size_in, size_out);
 
-   st.Eval(shape, out, t);
+   t(4) = 0.5;  // Traslate in the colunm direction.
+   t(5) = 0.5;
+   gridAffine grd(size_in, size_out);
+
+/*
+   ColVector t(2);
+   t.setZero();
+
+   t(0) = 13.0; 
+   t(1) = 14.0;
+   gridLogPolar grd(size_in, size_out, waste);
+   */
+   SampleMatrix sm;
+   samplerBiLinear smp(size_in, size_out);
+
+   vector_of_matrix vom_shape;
+   vom_shape.push_back(shape);
+   vector_of_matrix vom_out;
+   vom_out.push_back(out);
+   grd.Eval(sm, t);
+   smp.Eval(vom_shape, vom_out, sm);
+   out = vom_out[0];
 
    OWeightsCSVFile fcsv(path, "transformer");
    MakeMatrixImage(path + "\\transformer_in.bmp", shape);
@@ -1686,73 +1706,99 @@ void test_transformer()
    //cout << shape << endl;
 }
 
-#define COMPUTE_LOSS {\
-   st.Eval(shape, out, t);\
-   vom_in[0] = out;\
-   vom_out = flat.Eval(vom_in);\
-   e = loss.Eval(vom_out[0].col(0), label);\
-}
+   #define COMPUTE_LOSS {\
+      grd.Eval(sm, t);\
+      vom_out[0].resize(size_out.rows, size_out.cols);\
+      smp.Eval(vom_in, vom_out, sm);\
+      vom_out = flat.Eval(vom_out);\
+      e = loss.Eval(vom_out[0].col(0), label);\
+   }
+
+
+
+//#define AFFINE
 
 void TestTransformerGradComp()
 {
+   const Size size_in(28, 28);
+   const int waste = 0;
+   //const Size size_out(32, 32 - waste);
+   const Size size_out(28, 28);
 
-   const SpacialTransformer::Size size_in(28, 28);
-   const SpacialTransformer::Size size_out(28, 28);
-   Matrix shape(size_in.rows, size_in.cols);
-   Matrix out(size_out.rows, size_out.cols);
-
-   Flatten2D flat(iConvoLayer::Size(size_out.rows, size_out.cols), 1);
+   Flatten2D flat(Size(size_out.rows, size_out.cols), 1);
    LossL2 loss(size_out.rows * size_out.cols, 1);
 
    ColVector label(size_out.rows * size_out.cols);
    label.setZero();
 
    vector_of_matrix vom_in(1);
+   vom_in[0].resize(size_in.rows, size_in.cols);
+   //vom_in[0].setRandom();
+   MakeCenterPlus(vom_in[0], 10.0);
+  // MakeCenterCircle(vom_in[0], 10.0);
+   //MakeCenterGaussian(vom_in[0], 10.0);
+
    vector_of_matrix vom_out(1);
 
    ColVector vv;
 
    double e;
    double f1, f2;
-
-   shape.setRandom();
-
+   
+#ifdef AFFINE
    ColVector t(6);
    t.setZero();
 
    // Layout
    //   0     1      4
    //   2     3      5
-   t(0) = 1;
-   t(1) = 0;
-   t(2) = 0;
-   t(3) = 1;
-   t(4) = 0.5;  // Traslate in the col direction.
-   t(5) = 0.5;
+   t(0) = cos(M_PI * 45.0 / 180.0); // 1;
+   t(1) = -sin(M_PI * 45.0 / 180.0); // 0;
+   t(2) = sin(M_PI * 45.0 / 180.0); // 0;
+   t(3) = cos(M_PI * 45.0 / 180.0); // 1;
 
-   SpacialTransformer st(size_in, size_out);
+   //t(0) =  1;
+   //t(1) =  0;
+   //t(2) =  0;
+   //t(3) =  1;   
+   t(4) = 1.0;  // Traslate in the col direction.
+   t(5) = 1.0;
 
+   gridAffine grd(size_in, size_out);
+#else  
+   ColVector t(2);
+   t.setZero();
+
+   t(0) = 13.0;
+   t(1) = 14.0;
+   gridLogPolar grd(size_in, size_out, waste);
+#endif
+
+   SampleMatrix sm;
+   samplerBiLinear smp(size_in, size_out);
+
+   /*
    // Test Sample Gradient  (U to V)
    
-   Matrix dif(size_out.rows, size_out.cols);
+   Matrix dif(size_in.rows, size_in.cols);
    dif.setZero();
 
-   for (int r = 0; r < size_out.rows; r++) {
+   for (int r = 0; r < size_in.rows; r++) {
       std::cout << ".";
-      for (int c = 0; c < size_out.cols; c++) {
+      for (int c = 0; c < size_in.cols; c++) {
          double eta = 1.0e-5;
 
-         double w1 = shape(r, c);
+         double w1 = vom_in[0](r, c);
          //----- Eval ------
-         shape(r, c) = w1 - eta;
+         vom_in[0](r, c) = w1 - eta;
          COMPUTE_LOSS
          f1 = e;
 
-         shape(r, c) = w1 + eta;
+         vom_in[0](r, c) = w1 + eta;
          COMPUTE_LOSS
          f2 = e;
 
-         shape(r, c) = w1;
+         vom_in[0](r, c) = w1;
 
          dif(r, c) = (f2 - f1) / (2.0 * eta);
       }
@@ -1761,22 +1807,21 @@ void TestTransformerGradComp()
    COMPUTE_LOSS
    vector_of_matrix vb(1);
    RowVector gg = loss.LossGradient();
-   vom_in[0] = gg;
-   vb = flat.BackProp(vom_in);
+   vb[0] = gg;
+   vb = flat.BackProp(vb);
 
-   vom_out[0] = st.BackpropSampler(vb[0]);
+   vom_out = smp.Backprop(vb, sm);
 
    OWeightsCSVFile fcsv(path, "samp_grad");
    fcsv.Write(dif, 0);
    fcsv.Write(vom_out[0], 1);
 
-
    cout << "Du//Dv max coeff: " << (dif - vom_out[0]).maxCoeff() << endl;
-   
+*/   
+   /*
+   ColVector tdif(t.size());
 
-   ColVector tdif(6);
-
-   for (int i = 0; i < 6; i++) {
+   for (int i = 0; i < t.size(); i++) {
       double eta = 1.0e-5;
 
       double w1 = t(i);
@@ -1791,7 +1836,7 @@ void TestTransformerGradComp()
 
       t(i) = w1;
 
-      tdif(i, 0) = (f2 - f1) / (2.0 * eta);
+      tdif(i) = (f2 - f1) / (2.0 * eta);
 
    }
 
@@ -1799,18 +1844,49 @@ void TestTransformerGradComp()
 
    vector_of_matrix vm_backprop(1);
    RowVector g = loss.LossGradient();
-   vom_in[0] = g;
-   vm_backprop = flat.BackProp(vom_in);
+   vm_backprop[0] = g;
+   vm_backprop = flat.BackProp(vm_backprop);
 
-   g = st.BackpropGrid(vm_backprop[0]);
+   Matrix dldr;
+   Matrix dldc;
+
+   smp.ComputeGridGradients(dldr, dldc, vm_backprop, sm);
+   g = grd.Backprop(dldr,dldc,sm);
 
    cout << "fintie dif: " << tdif.col(0).transpose() << endl
       << "analog dif: " << g << endl;
 
    tdif -= g.transpose();
-   tdif.cwiseAbs();
-   cout << "abs differ: " << tdif.col(0).transpose() << endl;
+   cout << "differ: " << tdif.col(0).transpose() << endl;
+*/
 
+
+   ColVector l(100);
+   ColVector dl(100);
+
+   for (int i = 0; i < 100; i++) {
+      t(1) = 14.0 + 0.01 * (double)i;
+
+      COMPUTE_LOSS
+      l(i) = e;
+
+      vector_of_matrix vm_backprop(1);
+      RowVector g = loss.LossGradient();
+      vm_backprop[0] = g;
+      vm_backprop = flat.BackProp(vm_backprop);
+
+      Matrix dldr;
+      Matrix dldc;
+
+      smp.ComputeGridGradients(dldr, dldc, vm_backprop, sm);
+      g = grd.Backprop(dldr, dldc, sm);
+
+      dl(i) = g(1);
+   }
+
+   OWeightsCSVFile lcsv(path, "loss");
+   lcsv.Write(l, 0);
+   lcsv.Write(dl, 1);
 
    cout << "enter a key and press Enter" << endl;
    char c;
@@ -1953,9 +2029,9 @@ int main()
 {
     std::cout << "Algorithm Tester!\n";
     //test_transformer();
-    //TestTransformerGradComp();
+    TestTransformerGradComp();
     //TestCyclicTransformerGradComp();
-    TestCyclicTransform();
+    //TestCyclicTransform();
     return 0;
     //ColVector test;
     //test = ColVector::LinSpaced(11, -1.0, 1.0) * ((11 - 1) / 2.0);

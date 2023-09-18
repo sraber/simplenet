@@ -162,6 +162,7 @@
     <ClInclude Include="..\CyclicVectorTransformer.h" />
     <ClInclude Include="..\Layer.h" />
     <ClInclude Include="..\SpacialTransformer.h" />
+    <ClInclude Include="Centroid.h" />
     <ClInclude Include="FilterLayer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

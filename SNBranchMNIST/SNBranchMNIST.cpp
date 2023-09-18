@@ -1,7 +1,7 @@
 // SNBranchMNIST.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
-#define LOGPOLAR
+//#define LOGPOLAR
 #ifdef LOGPOLAR
 const int INPUT_ROWS = 32;
 //const int INPUT_COLS = 32;
@@ -9,8 +9,11 @@ const int LP_WASTE = 6;
 //const int LP_WASTE = 12;
 const int INPUT_COLS = 32 - LP_WASTE;
 #else
-const int INPUT_ROWS = 28;
-const int INPUT_COLS = 28;
+const int LP_WASTE = 6;
+//const int INPUT_ROWS = 28;
+//const int INPUT_COLS = 28;
+const int INPUT_ROWS = 32;
+const int INPUT_COLS = 32 - LP_WASTE;
 #endif
 #define FFT
 #define CYCLIC
@@ -29,7 +32,8 @@ const int INPUT_COLS = 28;
 #include <Layer.h>
 #include "FilterLayer.h"
 #include <SpacialTransformer.h>
-#include <CyclicVectorTransformer.h>;
+#include <CyclicVectorTransformer.h>
+#include "Centroid.h"
 #include <bmp.h>
 #include <chrono>
 #include <deque>
@@ -341,20 +345,22 @@ class DAGConvoLayerObj : public iDAGObj
 public:
    unsigned int ID;
    shared_ptr<iConvoLayer> pLayer;
-   shared_ptr<CovNetContext> pContext;
+   //shared_ptr<CovNetContext> pContext;
+   DAGContext& Context;
 
-   DAGConvoLayerObj(unsigned int id, shared_ptr<iConvoLayer> _pLayer, shared_ptr<CovNetContext> _pContext ) :
+   //DAGConvoLayerObj(unsigned int id, shared_ptr<iConvoLayer> _pLayer, shared_ptr<CovNetContext> _pContext) :
+   DAGConvoLayerObj(unsigned int id, shared_ptr<iConvoLayer> _pLayer, DAGContext& _pContext) :
       ID(id),
       pLayer(std::move(_pLayer)),
-      pContext(_pContext)
+      Context(_pContext)
    {}
 
    // iDAGObj implementation
    void Eval() {
-      pContext->m = pLayer->Eval(pContext->m);
+      Context.m = pLayer->Eval(Context.m);
    }
    void BackProp() {
-      pContext->m = pLayer->BackProp(pContext->m);
+      Context.m = pLayer->BackProp(Context.m);
    }
    void Update(double eta) { pLayer->Update(eta); }
    void Save(shared_ptr<iPutWeights> _pOut) { pLayer->Save(_pOut); }
@@ -373,25 +379,26 @@ public:
 class DAGFlattenObj : public iDAGObj
 {
    shared_ptr<iConvoLayer> pLayer;
-   shared_ptr<CovNetContext> pCovContext;
-   shared_ptr<NetContext> pLayerContext; 
+   DAGContext& Context;
+   //shared_ptr<NetContext> pLayerContext; 
 public:
    unsigned int ID;
-   DAGFlattenObj(unsigned int id, shared_ptr<iConvoLayer> _pLayer, shared_ptr<CovNetContext> _pContext1, shared_ptr<NetContext> _pContext2) :
+   //DAGFlattenObj(unsigned int id, shared_ptr<iConvoLayer> _pLayer, shared_ptr<CovNetContext> _pContext1, shared_ptr<NetContext> _pContext2) :
+   DAGFlattenObj(unsigned int id, shared_ptr<iConvoLayer> _pLayer, DAGContext& _pContext1 ) :
       ID(id),
       pLayer(std::move(_pLayer)),
-      pCovContext(_pContext1),
-      pLayerContext(_pContext2)
+      Context(_pContext1)
+      //pLayerContext(_pContext2)
    {}
    void Eval() {
-      pLayerContext->v = pLayer->Eval(pCovContext->m)[0].col(0);
+      Context.v = pLayer->Eval(Context.m)[0].col(0);
    }
    void BackProp() {
       vector_of_matrix t(1);
-      t[0] = pLayerContext->g;
+      t[0] = Context.g;
       // REVIEW: Note here that I am trying to use the VOM of the forward
       //         pass for the backward pass as well.
-      pCovContext->m = pLayer->BackProp(t);
+      Context.m = pLayer->BackProp(t);
    }
    void Update(double eta) { pLayer->Update(eta); }
    void Save(shared_ptr<iPutWeights> _pOut) { pLayer->Save(_pOut); }
@@ -403,19 +410,19 @@ public:
 class DAGLayerObj : public iDAGObj
 {
    shared_ptr<iLayer> pLayer;
-   shared_ptr<NetContext> pContext;
+   DAGContext& Context;
 public:
    unsigned int ID;
-   DAGLayerObj(unsigned int id, shared_ptr<iLayer> _pLayer, shared_ptr<NetContext> _pContext) :
+   DAGLayerObj(unsigned int id, shared_ptr<iLayer> _pLayer, DAGContext& _pContext) :
       ID(id),
       pLayer( std::move(_pLayer) ),
-      pContext( _pContext)
+      Context( _pContext)
    {}
    void Eval() {
-      pContext->v = pLayer->Eval(pContext->v);
+      Context.v = pLayer->Eval(Context.v);
    }
    void BackProp() {
-      pContext->g = pLayer->BackProp(pContext->g);
+      Context.g = pLayer->BackProp(Context.g);
    }
    void Update(double eta) { pLayer->Update(eta); }
    void Save(shared_ptr<iPutWeights> _pOut) { pLayer->Save(_pOut); }
@@ -436,17 +443,17 @@ public:
 
 class DAGConvoContextCopyObj : public iDAGObj
 {
-   shared_ptr<CovNetContext> pContext1;
-   shared_ptr<CovNetContext> pContext2;
+   DAGContext& Context1;
+   DAGContext& Context2;
 public:
    unsigned int ID;
-   DAGConvoContextCopyObj(unsigned int id, shared_ptr<CovNetContext> _pContext1, shared_ptr<CovNetContext> _pContext2) :
+   DAGConvoContextCopyObj(unsigned int id, DAGContext& _pContext1, DAGContext& _pContext2) :
       ID(id),
-      pContext1(_pContext1),
-      pContext2(_pContext2)
+      Context1(_pContext1),
+      Context2(_pContext2)
    {}
    void Eval() {
-      pContext2->m = pContext1->m;
+      Context2.m = Context1.m;
    }
    void BackProp() {}
    void Update(double eta) { }
@@ -458,17 +465,17 @@ public:
 
 class DAGContextCopyObj : public iDAGObj
 {
-   shared_ptr<NetContext> pContext1;
-   shared_ptr<NetContext> pContext2;
+   DAGContext& Context1;
+   DAGContext& Context2;
 public:
    unsigned int ID;
-   DAGContextCopyObj(unsigned int id, shared_ptr<NetContext> _pContext1, shared_ptr<NetContext> _pContext2) :
+   DAGContextCopyObj(unsigned int id, DAGContext& _pContext1, DAGContext& _pContext2) :
       ID(id),
-      pContext1(_pContext1),
-      pContext2(_pContext2)
+      Context1(_pContext1),
+      Context2(_pContext2)
    {}
    void Eval() {
-      pContext2->v = pContext1->v;
+      Context2.v = Context1.v;
    }
    void BackProp() {}
    void Update(double eta) { }
@@ -481,25 +488,25 @@ public:
 class DAGBranchObj : public iDAGObj
 {
    friend class DAGExitTest;
-   shared_ptr<NetContext> pContext1;
-   shared_ptr<NetContext> pContext2;
+   DAGContext& Context1;
+   DAGContext& Context2;
    bool bBackprop;
    double BranchWeight;
 public:
    unsigned int ID;
-   DAGBranchObj(unsigned int id, shared_ptr<NetContext> _pContext1, shared_ptr<NetContext> _pContext2, bool backprop_branch = true, double branch_weight = 0.3 ) :
+   DAGBranchObj(unsigned int id, DAGContext& _pContext1, DAGContext& _pContext2, bool backprop_branch = true, double branch_weight = 0.3 ) :
       ID(id),
-      pContext1(_pContext1),
-      pContext2(_pContext2),
+      Context1(_pContext1),
+      Context2(_pContext2),
       bBackprop(backprop_branch),
       BranchWeight(branch_weight)
    {}
    void Eval() {
-      pContext2->v = pContext1->v;
+      Context2.v = Context1.v;
    }
    void BackProp() {
       if (bBackprop && BranchWeight > 0.0) {
-         pContext1->g += (BranchWeight * pContext2->g);
+         Context1.g += (BranchWeight * Context2.g);
       }
    }
    void Update(double eta) { }
@@ -511,32 +518,32 @@ public:
 
 class DAGJoinObj : public iDAGObj
 {
-   shared_ptr<NetContext> pContext1;
-   shared_ptr<NetContext> pContext2;
+   DAGContext& Context1;
+   DAGContext& Context2;
    int s1 = 0;
    int s2 = 0;
 public:
    unsigned int ID;
    // Note: The contexts are assigned at creation time.  They can't be accessed until
    //       Eval is called.
-   DAGJoinObj(unsigned int id, shared_ptr<NetContext> _pContext1, shared_ptr<NetContext> _pContext2) :
+   DAGJoinObj(unsigned int id, DAGContext& _pContext1, DAGContext& _pContext2) :
       ID(id),
-      pContext1(_pContext1),
-      pContext2(_pContext2)
+      Context1(_pContext1),
+      Context2(_pContext2)
    {}
    void Eval() {
-      s1 = static_cast<int>(pContext1->v.size());
-      s2 = static_cast<int>(pContext2->v.size());
-      ColVector t = pContext2->v;
-      pContext2->v.resize(s1 + s2);
-      pContext2->v.block(0, 0, s1, 1) = pContext1->v;
-      pContext2->v.block(s1, 0, s2, 1) = t;
+      s1 = static_cast<int>(Context1.v.size());
+      s2 = static_cast<int>(Context2.v.size());
+      ColVector t = Context2.v;
+      Context2.v.resize(s1 + s2);
+      Context2.v.block(0, 0, s1, 1) = Context1.v;
+      Context2.v.block(s1, 0, s2, 1) = t;
    }
    void BackProp() {
-      RowVector t = pContext2->g.block(0, s1, 1, s2);
-      pContext1->g = pContext2->g.block(0, 0, 1, s1);
-      pContext2->g.resize(s2);
-      pContext2->g = t;
+      RowVector t = Context2.g.block(0, s1, 1, s2);
+      Context1.g = Context2.g.block(0, 0, 1, s1);
+      Context2.g.resize(s2);
+      Context2.g = t;
    }
    void Update(double eta) { }
    void Save(shared_ptr<iPutWeights> _pOut) {}
@@ -547,33 +554,33 @@ public:
 
 class DAGCompAvg : public iDAGObj
 {
-   shared_ptr<NetContext> pContext1;
-   shared_ptr<NetContext> pContextAvg;
+   DAGContext& Context1;
+   DAGContext& ContextAvg;
    static unsigned int N;
 public:
    unsigned int ID;
    // Note: The contexts are assigned at creation time.  They can't be accessed until
    //       Eval is called.
-   DAGCompAvg(unsigned int id, shared_ptr<NetContext> _pContext1, shared_ptr<NetContext> _pContextAvg) :
+   DAGCompAvg(unsigned int id, DAGContext& _pContext1, DAGContext& _pContextAvg) :
       ID(id),
-      pContext1(_pContext1),
-      pContextAvg(_pContextAvg)
+      Context1(_pContext1),
+      ContextAvg(_pContextAvg)
    {}
    void Eval() {
       N++;
-      int s = static_cast<int>(pContext1->v.size());
-      runtime_assert( s == static_cast<int>(pContextAvg->v.size()));
+      int s = static_cast<int>(Context1.v.size());
+      runtime_assert( s == static_cast<int>(ContextAvg.v.size()));
       double a = 1.0 / (double)(N);
       double b = 1.0 - a;
       //for (int i = 0; i < s; i++) {
       //   pContextAvg->v[i] = a * pContext1->v[i] + b * pContextAvg->v[i];
       //}
          
-      pContextAvg->v = a * pContext1->v + b * pContextAvg->v;
+      ContextAvg.v = a * Context1.v + b * ContextAvg.v;
    }
    void BackProp() {
       N = 0;
-      pContext1->g = pContextAvg->g;
+      Context1.g = ContextAvg.g;
    }
    void Update(double eta) { }
    void Save(shared_ptr<iPutWeights> _pOut) {}
@@ -611,8 +618,9 @@ public:
 class DAGErrorLayer : public iDAGObj
 {
    shared_ptr<iLossLayer> pLossLayer;
-   shared_ptr<ErrorContext> pErrorContext;
-   shared_ptr<NetContext> pNetContext;
+   ErrorContext& errContext;
+   //shared_ptr<NetContext> pNetContext;
+   DAGContext& Context;
 
    void StatEval(const ColVector& x, const ColVector& y){
       assert(x.size() == y.size());
@@ -629,23 +637,23 @@ class DAGErrorLayer : public iDAGObj
 
       }
 
-      pErrorContext->SetStatus(  (x_max_index == y_max_index), 
-                                 pLossLayer->Eval(pNetContext->v, pErrorContext->label) );
-      pErrorContext->class_max = xmax;
+      errContext.SetStatus(  (x_max_index == y_max_index),
+                                 pLossLayer->Eval(Context.v, errContext.label) );
+      errContext.class_max = xmax;
    }
 public:
    unsigned int ID;
-   DAGErrorLayer(unsigned int id, shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) :
+   DAGErrorLayer(unsigned int id, shared_ptr<iLossLayer> _pLayer, DAGContext& _pContext, ErrorContext& _pEContext) :
       ID(id),
       pLossLayer(std::move(_pLayer)),
-      pErrorContext(_pEContext),
-      pNetContext( _pContext )
+      errContext(_pEContext),
+      Context( _pContext )
    {}
    void Eval() {
-      StatEval(pNetContext->v, pErrorContext->label);
+      StatEval(Context.v, errContext.label);
    }
    void BackProp() {
-      pNetContext->g = pLossLayer->LossGradient();
+      Context.g = pLossLayer->LossGradient();
    }
    void Update(double eta) { }
    void Save(shared_ptr<iPutWeights> _pOut) {}
@@ -657,7 +665,7 @@ public:
 // REVIEW: This class only works with classifiers.
 class DAGExitTest : public iDAGObj
 {
-   shared_ptr<ErrorContext> pError;
+   ErrorContext& Error;
    shared_ptr<ExitContext> pExit;
    shared_ptr<DAGBranchObj> pBranch;
    unsigned long WarmUpCount;
@@ -667,7 +675,7 @@ class DAGExitTest : public iDAGObj
    double EvalBranchThreshold;
 public:
    unsigned int ID;
-   DAGExitTest(unsigned int id, shared_ptr<ExitContext> _pContext, shared_ptr<DAGBranchObj> _pBranch, shared_ptr<ErrorContext> _pError,
+   DAGExitTest(unsigned int id, shared_ptr<ExitContext> _pContext, shared_ptr<DAGBranchObj> _pBranch, ErrorContext& _pError,
                unsigned long warm_up_count = 0.0, double backprop_limit_lower = -1.0, double backprop_limit_upper = -1.0, double eval_branch_threshold = 0.9) :
       ID(id),
       Count(0),
@@ -677,7 +685,7 @@ public:
       EvalBranchThreshold(eval_branch_threshold),
       pExit(_pContext),
       pBranch(_pBranch),
-      pError(_pError)
+      Error(_pError)
    {
       runtime_assert(EvalBranchThreshold >= 0 && EvalBranchThreshold <= 1.0);
    }
@@ -687,7 +695,7 @@ public:
          pBranch->bBackprop = false;
          pExit->stop = true;
       }
-      else if( pError->correct && pError->class_max >= EvalBranchThreshold){
+      else if( Error.correct && Error.class_max >= EvalBranchThreshold){
          pBranch->bBackprop = false;
          pExit->stop = true;
          }
@@ -699,12 +707,12 @@ public:
    void BackProp() {
       // REVIEW: This seemed to work.  This should be it's own count threshold, like BackpropLimitCount.
       if (Count > 6 * WarmUpCount) {
-         if (BackpropLimitUpper > 0.0 && pError->class_max >= BackpropLimitUpper) {
+         if (BackpropLimitUpper > 0.0 && Error.class_max >= BackpropLimitUpper) {
             //cout << "Limit backprop on high end. ID" << ID << " error:" << pError->class_max << endl;
             pBranch->bBackprop = false;
             pExit->stop = true;
          }
-         else if (BackpropLimitLower > 0.0 && pError->class_max < BackpropLimitLower) {
+         else if (BackpropLimitLower > 0.0 && Error.class_max < BackpropLimitLower) {
             //cout << "Limit backprop on low end. ID" << ID << " error:" << pError->class_max << endl;
             pBranch->bBackprop = false;
             pExit->stop = true;
@@ -813,22 +821,63 @@ public:
 class DAGCyclicTransformLayer : public iDAGObj
 {
    shared_ptr<CyclicVectorTransformer> pTransformer;
-   shared_ptr<NetContext> pInOutNC;
-   shared_ptr<NetContext> pLocNC;
+   DAGContext& InOutNC;
+   DAGContext& LocNC;
 public:
    unsigned int ID;
-   DAGCyclicTransformLayer(unsigned int id, shared_ptr<CyclicVectorTransformer> _pTransformer, shared_ptr<NetContext> _pContext1, shared_ptr<NetContext> _pContext2 ) :
+   DAGCyclicTransformLayer(unsigned int id, shared_ptr<CyclicVectorTransformer> _pTransformer, DAGContext& _pContext1, DAGContext& _pContext2 ) :
       ID(id),
-      pInOutNC(_pContext1),
-      pLocNC(_pContext2),
+      InOutNC(_pContext1),
+      LocNC(_pContext2),
       pTransformer(_pTransformer)
    {}
    void Eval() {
-      pTransformer->Eval(pInOutNC->v, pInOutNC->v, pLocNC->v[0]);
+      pTransformer->Eval(InOutNC.v, InOutNC.v, LocNC.v[0]);
    }
    void BackProp() {
-      pLocNC->g = pTransformer->BackpropGrid(pInOutNC->g);
-      pInOutNC->g = pTransformer->BackpropSampler(pInOutNC->g);
+      LocNC.g = pTransformer->BackpropGrid(InOutNC.g);
+      InOutNC.g = pTransformer->BackpropSampler(InOutNC.g);
+   }
+   void Update(double eta) { }
+   void Save(shared_ptr<iPutWeights> _pOut) {}
+   void StashWeights() {}
+   void ApplyStash() {}
+   int GetID() { return ID; }
+};
+
+class DAGSpacialTransformLayer : public iDAGObj
+{
+   shared_ptr<iSampler> pSampler;
+   shared_ptr<iGrid> pGrid;
+   DAGContext& InOutNC;
+   DAGContext& LocNC;
+   SampleMatrix SM;
+   bool WantBackprop;
+public:
+   unsigned int ID;
+   DAGSpacialTransformLayer(unsigned int id, shared_ptr<iSampler> _pSampler, shared_ptr<iGrid> _pGrid, DAGContext& _pContext1, DAGContext& _pContext2,
+                            bool want_backprop = true) :
+      ID(id),
+      InOutNC(_pContext1),
+      LocNC(_pContext2),
+      pSampler(_pSampler),
+      pGrid(_pGrid),
+      WantBackprop(want_backprop)
+   {}
+   void Eval() {
+      pGrid->Eval(SM, LocNC.v );
+      pSampler->Eval(InOutNC.m, InOutNC.m, SM);
+   }
+   void BackProp() {
+      Matrix dLdR;
+      Matrix dLdC;
+
+      pSampler->ComputeGridGradients(dLdR, dLdC, InOutNC.m, SM);
+      LocNC.g = pGrid->Backprop(dLdR,dLdC, SM);
+
+      if (WantBackprop) {
+         InOutNC.m = pSampler->Backprop(InOutNC.m, SM);
+      }
    }
    void Update(double eta) { }
    void Save(shared_ptr<iPutWeights> _pOut) {}
@@ -841,33 +890,7 @@ typedef vector< shared_ptr<iDAGObj> > layer_list;
 layer_list LayerList;
 
 std::map<int, DAGContext> CMap;
-
-// This is the main input context.
-   // Convo Layer
-shared_ptr<CovNetContext> pContextStart = make_shared<CovNetContext>();
-shared_ptr<CovNetContext> pContext1 = make_shared<CovNetContext>();
-shared_ptr<CovNetContext> pContext4 = make_shared<CovNetContext>();
-shared_ptr<CovNetContext> pContext7 = make_shared<CovNetContext>();
-shared_ptr<CovNetContext> pContext10 = make_shared<CovNetContext>();
-shared_ptr<CovNetContext> pContext13 = make_shared<CovNetContext>();
-// FC Layer main branch
-shared_ptr<NetContext> pContext2 = make_shared<NetContext>();
-
-shared_ptr<NetContext> pContext3 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext5 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext6 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext8 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext9 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext11 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext12 = make_shared<NetContext>();
-shared_ptr<NetContext> pContext14 = make_shared<NetContext>();
-
-
-shared_ptr<ErrorContext> gpError1 = make_shared<ErrorContext>(1);
-shared_ptr<ErrorContext> gpError2 = make_shared<ErrorContext>(2);
-shared_ptr<ErrorContext> gpError3 = make_shared<ErrorContext>(3);
-shared_ptr<ErrorContext> gpError4 = make_shared<ErrorContext>(4);
-shared_ptr<ErrorContext> gpError5 = make_shared<ErrorContext>(5);
+std::map<int, ErrorContext> EMap;
 
 shared_ptr<ExitContext> gpExit = make_shared<ExitContext>();
 
@@ -887,7 +910,7 @@ public:
       //file << props["T"].d.get() << endl;
 
       if (props["ID"].i.get() == 1) {
-         gpError3->SetStatus(false, props["dG"].rv.get()[0] );
+         EMap[3].SetStatus(false, props["dG"].rv.get()[0] );
       }
    }
 };
@@ -910,7 +933,7 @@ public:
    {
       //file << props["T"].d.get() << endl;
 
-      gpError3->SetStatus(false, props["dC"].rv.get().norm() );
+      EMap[3].SetStatus(false, props["dC"].rv.get().norm() );
    }
 };
 
@@ -1019,28 +1042,27 @@ public:
    }
 
    RowVector LossGradient(void) {
-      //RowVector g(Size);
       for (int i = 0; i < Size; i++) {
-         if (X[i] == 0.0) {
-            if (Y[i] == 0.0) {
+         if (X[i] <= std::numeric_limits<double>::epsilon()) {
+            if (Y[i] <= std::numeric_limits<double>::epsilon()) {
                G[i] = 0.0;
             }
             else {
-               //G[i] = -10.0;
-               // This may be the wrong value, but it is safe.  The worst it does is that
-               // it does not progress the solution.
-               G[i] = 0.0;
-               cout << "Loss Gradient encountered div by zero" << endl; // Debug
+               // NOTE: Usually, if Y (the label) is not zero then it will be one.  The result of the division
+               //       below will be a very large number.
+               G[i] = -Y[i] / std::numeric_limits<double>::epsilon();
+               //cout << "Loss Gradient encountered div by zero.  G =" << G[i] << endl; // Debug
             }
          }
          else {
             G[i] = -Y[i] / X[i];
-            // Gradient clipping.
-            if (std::abs(G[i]) > 1.0E6) {
-               G[i] = std::signbit(G[i]) == true ? -1.0E6 : 1.0E6;
-            }
+         }
+         // Gradient clipping.
+         if (std::abs(G[i]) > 1.0E6) {
+            G[i] = std::signbit(G[i]) == true ? -1.0E6 : 1.0E6;
          }
       }
+
       return G;
    }
 };
@@ -1151,7 +1173,7 @@ void InitLeNet5AModel(bool restore)
    optoADAM::B2 = 0.999;
    optoLowPass::Momentum = 0.8;
 
-   int l = 1; // Layer counter
+   int l = 1; // Layer ID
 
    // Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
@@ -1167,9 +1189,8 @@ void InitLeNet5AModel(bool restore)
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in)),
          make_shared<OPTO>(),
          true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1]));
    }
-   l++;
 
    //---------------------------------------------------------------
    //
@@ -1182,14 +1203,14 @@ void InitLeNet5AModel(bool restore)
    assert(!(size_in.rows % size_out.rows));
    assert(!(size_in.cols % size_out.cols));
    {
+      l = 2;
       shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
       //pl->SetEvalPostActivationCallBack(MCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1]));
    }
-   l++;
    //---------------------------------------------------------------
 
-   // Convolution Layer 3 -----------------------------------------
+   // Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
    size_in = size_out;
    size_out.Resize(10,10);
@@ -1197,18 +1218,18 @@ void InitLeNet5AModel(bool restore)
    chn_in = chn_out;
    chn_out = 16;
    {
+      l = 3;
       shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
          make_unique<actTanh>(),
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in)),
          make_shared<OPTO>(),
          true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1]));
    }
-   l++;
    //---------------------------------------------------------------
    //
-   // Pooling Layer 4 ----------------------------------------------
+   // Pooling Layer ----------------------------------------------
    // Type: poolAvg2D
    size_in = size_out;
    size_out.Resize(5,5);
@@ -1217,9 +1238,9 @@ void InitLeNet5AModel(bool restore)
    assert(!(size_in.rows % size_out.rows));
    assert(!(size_in.cols % size_out.cols));
    {
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>( make_shared<poolAvg2D>(size_in, chn_in, size_out) ), pContextStart));
+      l = 4;
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>( make_shared<poolAvg2D>(size_in, chn_in, size_out) ), CMap[1]));
    }
-   l++;
    //---------------------------------------------------------------      
 
    // Convolution Layer 5 -----------------------------------------
@@ -1230,15 +1251,15 @@ void InitLeNet5AModel(bool restore)
    chn_in = chn_out;
    chn_out = 120;
    {
+      l = 5;
       shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
          make_unique<actTanh>(),
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Xavier, chn_in)),
          make_shared<OPTO>(),
          true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1]));
    }
-   l++;
    //---------------------------------------------------------------
 
 
@@ -1249,10 +1270,10 @@ void InitLeNet5AModel(bool restore)
    int len_out = size_in.rows * size_in.cols * chn_in;
    chn_out = 1;
    {
+      l = 6;
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart, pContext2));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1] ));
    }
-   l++;
    //---------------------------------------------------------------      
 
    //--------- setup the fully connected network -------------------------------------------------------------------------
@@ -1262,15 +1283,16 @@ void InitLeNet5AModel(bool restore)
    int len_in = len_out;
    len_out = 84;
    {
+      l = 7;
       shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out,
          //make_unique<actLeakyReLU>(0.01),
          make_unique<actReLU>(),
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[1]));
    }
-   l++;
+
    //---------------------------------------------------------------      
   
    // Fully Connected Layer 7 ---------------------------------------
@@ -1278,29 +1300,33 @@ void InitLeNet5AModel(bool restore)
    len_in = len_out;
    len_out = 10;
    {
+      l = 8;
       shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out,
          //make_unique<actLeakyReLU>(0.01),
          make_unique<actSoftMax>(),
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[1]));
    }
-   l++;
+
    //---------------------------------------------------------------      
 
    // Error Layer ---------------------------------------
    // Type: LossCrossEntropy
    {
+      l = 9;
       shared_ptr<LossCrossEntropy> pl = make_shared<LossCrossEntropy>(len_out, 1);
       // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), pContext2, gpError1));
+      EMap.emplace(0, 0);
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[1], EMap[0]));
    }
    l++;
 
 }
 //---------------------------- End LeNet 5A ---------------------------------------
 
+/*
 //----------------------------------------------------------------------------------
 
 void InitLeNet5BModel(bool restore)
@@ -2113,6 +2139,7 @@ void InitLeNet5LPModel(bool restore)
 
 }
 //---------------------------- End LeNet 5A ---------------------------------------
+*/
 
 void InitLPBranchModel1(bool restore)
 {
@@ -2148,7 +2175,7 @@ void InitLPBranchModel1(bool restore)
 
       //pl->SetBackpropCallBack(MCB);
 
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1] ));
    }
    l++;
    //---------------------------------------------------------------
@@ -2167,7 +2194,7 @@ void InitLPBranchModel1(bool restore)
 #else
       shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
 #endif
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContextStart));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[1] ));
    }
    l++;
    //---------------------------------------------------------------
@@ -2179,7 +2206,7 @@ void InitLPBranchModel1(bool restore)
    chn_out = 1;
    {
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), pContextStart, pContext2));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1] ));
    }
    l++;
    //---------------------------------------------------------------      
@@ -2196,7 +2223,7 @@ void InitLPBranchModel1(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[1] ));
    }
    l++;
    //---------------------------------------------------------------  
@@ -2212,7 +2239,7 @@ void InitLPBranchModel1(bool restore)
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
       //pl->SetBackpropCallBack(MCB1);
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[1] ));
    }
    l++;
    //---------------------------------------------------------------      
@@ -2221,10 +2248,148 @@ void InitLPBranchModel1(bool restore)
    {
       //shared_ptr<LossCrossEntropy> pl = make_shared<LossCrossEntropy>(len_out, 1);
       shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
-      // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), pContext2, gpError1));
+      EMap.emplace(1, 1);
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[1], EMap[1]));
    }
    l++;
+}
+
+void InitLPBranchModel1S(bool restore)
+{
+   INITIALIZE("LPB1\\LPB1S", optoADAM)
+   gModelBranches = 1;
+
+   optoADAM::B1 = 0.9;
+   optoADAM::B2 = 0.999;
+   optoLowPass::Momentum = 0.8;
+
+   LayerList.clear();
+
+   // NOTE: Used by Filter Pool.
+   clSize size_kernel(2, 4);
+
+   CMap[0].v.resize(1);
+   CMap[0].v[0] = 0;
+
+   // Convolution Layer -----------------------------------------
+   // Type: FilterLayer2D
+   clSize size_in(INPUT_ROWS, INPUT_COLS);
+   clSize size_out(INPUT_ROWS, 4);
+   clSize size_kern(INPUT_ROWS, INPUT_COLS);
+   int chn_in = 1;
+   int chn_out = 1;
+   int l = 1; // Layer counter
+   {
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
+         make_unique<actReLU>(),
+         //make_unique<actLinear>(), 
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+         make_shared<OPTO>(),
+         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
+
+      //pl->SetBackpropCallBack(MCB);
+
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1]));
+   }
+   //---------------------------------------------------------------
+   // Pooling Layer ----------------------------------------------
+   // Type: poolAvg2D
+   size_in = size_out;
+   size_out.Resize(INPUT_ROWS, 1);
+   chn_in = chn_out;
+   l = 2;
+   assert(!(size_in.rows % size_out.rows));
+   assert(!(size_in.cols % size_out.cols));
+   {
+#ifdef USE_FILTER_FOR_POOL
+      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_kernel);
+      //pl->SetEvalPostActivationCallBack(MVCB);
+#else
+      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
+#endif
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[1]));
+   }
+   //---------------------------------------------------------------
+   // Flattening Layer --------------------------------------------
+   // Type: Flatten2D
+   size_in = size_out;
+   chn_in = chn_out;
+   int len_out = size_in.rows * size_in.cols * chn_in;
+   chn_out = 1;
+   l = 3;
+   {
+      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[1]));
+   }
+   //---------------------------------------------------------------    
+      // Copy Context2 to Spectrum Context -----------------------------------------
+      //
+   l = 4;
+   LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[1], CMap[2]));
+   //l++;
+   //
+   //-----------------------------------------------------------------------
+
+   // Spectrum Layer ---------------------------------------
+   //
+   int len_in_branch_t = len_out;
+   int len_out_branch_t = len_out / 2;
+   {
+      l = 5;
+      shared_ptr<SpectrumOutputLayer> pl = make_shared<SpectrumOutputLayer>(len_in_branch_t, len_out_branch_t);
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[2]));
+   }
+   //---------------------------------------------------------------    
+   // Join Fully Connected Layer -----------------------------------------
+   //
+   l = 6;
+   len_out_branch_t += len_out;  // out len of fully connected layer prior to Transformer layer.
+   LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[2], CMap[1]));
+   //
+   //-----------------------------------------------------------------------    
+   // 
+   //--------- setup the fully connected network -------------------------------------------------------------------------
+   // 
+   // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+   int len_in = len_out_branch_t;
+   len_out = 32;
+   l = 7;
+   {
+      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out,
+         make_unique<actReLU>(),
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+         make_shared<OPTO>());
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[1]));
+   }
+   //---------------------------------------------------------------  
+
+   // Fully Connected Layer ---------------------------------------
+   // Type: SoftMAX
+   len_in = len_out;
+   len_out = 10;
+   l = 8;
+   {
+      // REVIEW:  USING SoftMaxEx   !!!!!!!!!!!!!!!!
+      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMaxEx>(),
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+         make_shared<OPTO>());
+      //pl->SetBackpropCallBack(MCB1);
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[1]));
+   }
+   //---------------------------------------------------------------      
+   // Error Layer ---------------------------------------
+   // Type: LossCrossEntropy
+   l = 9;
+   {
+      //shared_ptr<LossCrossEntropy> pl = make_shared<LossCrossEntropy>(len_out, 1);
+      shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
+      EMap.emplace(1, 1);
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[1], EMap[1]));
+   }
 }
 
 #define TRAIN_TRANSFORMER
@@ -2234,7 +2399,7 @@ void InitLPBranchModel1(bool restore)
 
 void InitLPBranchModel1T(bool restore)
 {
-   INITIALIZE("LPB1\\LPB1T", optoADAM)
+   INITIALIZE("LPB1\\LPB1T", optoLowPass)
    gModelBranches = 1;
 
 
@@ -2262,15 +2427,78 @@ void InitLPBranchModel1T(bool restore)
    //          Set to 4,4 to test downsampling.  It has been 2,4 .
    clSize size_kernel(2, 4);
 
-   int l = 1; // Layer counter
+   int l = 0; // Layer counter
+
+   // copy to 5
+   // copy to 2
+   // Filter layer
+   // Centroid layer
+   // LP Spacial Transformer c2, c5
+
 
    // Copy Start Context -----------------------------------------
    //
    l = 1;
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext1));
-   //l++;
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[2]));
    //
    //-----------------------------------------------------------------------
+   // 
+   //***************** LP Transformer *******************************
+   // 
+   // Copy Start Context -----------------------------------------
+   //
+   l = 20;
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[5]));
+   //
+   //-----------------------------------------------------------------------
+
+   // Convolution Layer -----------------------------------------
+   // Type: FilterLayer2D
+   clSize size_ct_in(28, 28);
+   clSize size_ct_out(28, 28);
+   // REVIEW: Have to modify FilterLayer2D so that linear or FFT convo can be selected
+   //         along with padding.
+   clSize size_ct_kern(28, 28);
+   {
+      l = 21;
+      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_ct_in, 1, size_ct_out, size_ct_kern, 1,
+         make_unique<actReLU>(),
+         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+         make_shared<OPTO>(),
+         true); // No bias. true/false
+
+      //pl->SetBackpropCallBack(MCB);
+
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[5]));
+   }
+   //---------------------------------------------------------------
+
+   // Centroid Layer --------------------------------------------
+   // Type: Centroid
+   // Note: Uses DAGFlattenObj.
+   size_ct_in = size_ct_out;
+   {
+      l = 22;
+      shared_ptr<Centroid> pl = make_shared<Centroid>(size_ct_in);
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[5]));
+   }
+   //-----------------------------------------------------------------
+
+   //---------------------------------------------------------------  
+   // LP Spacial Transformer
+   //
+   {
+      l = 23;
+      shared_ptr<samplerBiLinear> psmp = make_shared<samplerBiLinear>(Size(28, 28), Size(INPUT_ROWS, INPUT_COLS));
+      shared_ptr<gridLogPolar> pgrd = make_shared<gridLogPolar>(Size(28, 28), Size(INPUT_ROWS, INPUT_COLS), LP_WASTE);
+      // REVIEW: Transform sanity check test.
+      //pCVT->SetEvalPostActivationCallBack(MCB2);
+      LayerList.push_back(make_shared<DAGSpacialTransformLayer>(l, psmp, pgrd, CMap[2], CMap[5], false)); // C5 holds center point value.
+   }
+   //-----------------------------------------------------------------
+
+   //********* End LP Transformer *********************************************
 
    // Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
@@ -2290,9 +2518,8 @@ void InitLPBranchModel1T(bool restore)
 
       //pl->SetBackpropCallBack(MCB);
 
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext1));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[2]));
    }
-   //l++;
    //---------------------------------------------------------------
    // Pooling Layer ----------------------------------------------
    // Type: poolAvg2D
@@ -2310,9 +2537,8 @@ void InitLPBranchModel1T(bool restore)
 #else
       shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
 #endif
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[2]));
    }
-   //l++;
    //---------------------------------------------------------------
    // Flattening Layer --------------------------------------------
    // Type: Flatten2D
@@ -2325,9 +2551,8 @@ void InitLPBranchModel1T(bool restore)
    {
       l = 4;
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext1, pContext2));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[2]));
    }
-   //l++;
    //-----------------------------------------------------------------
    //           Transformer Layers
    //---------------------------------------------------------------      
@@ -2336,8 +2561,7 @@ void InitLPBranchModel1T(bool restore)
       // Copy Context2 to Spectrum Context -----------------------------------------
       //
       l = 9;
-      LayerList.push_back(make_shared<DAGContextCopyObj>(l, pContext2, pContext3));
-      //l++;
+      LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[2], CMap[3]));
       //
       //-----------------------------------------------------------------------
 
@@ -2349,16 +2573,14 @@ void InitLPBranchModel1T(bool restore)
       {
          l = 10;
          shared_ptr<SpectrumOutputLayer> pl = make_shared<SpectrumOutputLayer>(len_in_branch_t, len_out_branch_t );
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
-      //l++;
       //---------------------------------------------------------------    
       // Branch to Transform Layer -----------------------------------------
       //
       l = 11;
-      shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, pContext2, pContext5, false); // false -> no backprop.
+      shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, CMap[2], CMap[4], false); // false -> no backprop.
       LayerList.push_back(p_branch_t);
-      //l++;
       //
       //-----------------------------------------------------------------------
 
@@ -2366,8 +2588,7 @@ void InitLPBranchModel1T(bool restore)
       //
       l = 12;
       len_out_branch_t += len_out;  // out len of fully connected layer prior to Transformer layer.
-      LayerList.push_back(make_shared<DAGJoinObj>(l, pContext5, pContext3));
-      //l++;
+      LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[4], CMap[3]));
       //
       //-----------------------------------------------------------------------  
 #ifndef TRAIN_END_TO_END
@@ -2391,7 +2612,7 @@ void InitLPBranchModel1T(bool restore)
             dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
             make_shared<OPTO>());
          pl->SetEvalPreActivationCallBack(MCB2);
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
       //l++;
       //---------------------------------------------------------------  
@@ -2406,7 +2627,7 @@ void InitLPBranchModel1T(bool restore)
             lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
             dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
             make_shared<OPTO>());
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
       //l++;
       //---------------------------------------------------------------  
@@ -2421,7 +2642,7 @@ void InitLPBranchModel1T(bool restore)
             lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
             dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
             make_shared<OPTO>());
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
       //l++;
       //---------------------------------------------------------------  
@@ -2439,9 +2660,8 @@ void InitLPBranchModel1T(bool restore)
             dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
             make_shared<OPTO>());
          pl->SetEvalPreActivationCallBack(MCB2);
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
-      //l++;
       //---------------------------------------------------------------  
       // Fully Connected Layer ---------------------------------------
       // Type: ReLU
@@ -2454,9 +2674,8 @@ void InitLPBranchModel1T(bool restore)
             lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
             dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
             make_shared<OPTO>());
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
-      //l++;
       //---------------------------------------------------------------  
 
 #endif
@@ -2476,7 +2695,7 @@ void InitLPBranchModel1T(bool restore)
 
          pl->SetBackpropCallBack(MCB1);
 
-         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
       }
       //l++;
       // -----------------------------------------------------------------
@@ -2487,8 +2706,8 @@ void InitLPBranchModel1T(bool restore)
       {
          l = 17;
          shared_ptr<LossL2X> pl = make_shared<LossL2X>(len_out, 1);
-         // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-         LayerList.push_back(make_shared<DAGErrorLayer>(l, pl, pContext3, gpError1));
+         EMap.emplace(1, 1);
+         LayerList.push_back(make_shared<DAGErrorLayer>(l, pl, CMap[3], EMap[1]));
       }
 #endif
       //---------------------------------------------------------------------
@@ -2503,10 +2722,17 @@ void InitLPBranchModel1T(bool restore)
          shared_ptr<CyclicVectorTransformer> pCVT = make_shared<CyclicVectorTransformer>(len_in, len_out);
          // REVIEW: Transform sanity check test.
          //pCVT->SetEvalPostActivationCallBack(MCB2);
-         LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, pContext2, pContext3)); // pContext3 holds rotation value.
+         LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, CMap[2], CMap[3])); // C3 holds rotation value.
       }
-      //l++;
       //-----------------------------------------------------------------
+      // Copy Context 3 to Context 0 -----------------------------------------
+      //
+      // NOTE: This is just to put this model in line with others that use an average rotation which
+      //       is stored in C0 by convention.
+      l = 0;
+      LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[3], CMap[0]));
+      //
+      //-----------------------------------------------------------------------
 
    //****************** End Transformer Layer ***********************************************     
    //--------- setup the fully connected network -------------------------------------------------------------------------
@@ -2522,7 +2748,7 @@ void InitLPBranchModel1T(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[2]));
    }
    //l++;
    //---------------------------------------------------------------  
@@ -2537,7 +2763,7 @@ void InitLPBranchModel1T(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[2]));
    }
    //l++;
    //---------------------------------------------------------------      
@@ -2546,8 +2772,8 @@ void InitLPBranchModel1T(bool restore)
    {
       l = 8;
       shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
-      // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), pContext2, gpError1));
+      EMap.emplace(1, 1);
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[2], EMap[1]));
    }
    //l++;
 #endif
@@ -2589,7 +2815,7 @@ void InitLPBranchModel2T(bool restore)
    // Copy Start Context -----------------------------------------
    //
    l = 1;
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext1));
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[2]));
    //
    //-----------------------------------------------------------------------
 
@@ -2611,7 +2837,7 @@ void InitLPBranchModel2T(bool restore)
 
       //pl->SetBackpropCallBack(MCB);
 
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext1));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[2]));
    }
    //---------------------------------------------------------------
    // Pooling Layer ----------------------------------------------
@@ -2630,7 +2856,7 @@ void InitLPBranchModel2T(bool restore)
 #else
       shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
 #endif
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[2]));
    }
    //---------------------------------------------------------------
    // Flattening Layer --------------------------------------------
@@ -2644,7 +2870,7 @@ void InitLPBranchModel2T(bool restore)
    {
       l = 4;
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext1, pContext2));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[2]));
    }
    //-----------------------------------------------------------------
    //           Transformer Layers
@@ -2654,7 +2880,7 @@ void InitLPBranchModel2T(bool restore)
       // Copy Context2 to Spectrum Context -----------------------------------------
       //
    l = 9;
-   LayerList.push_back(make_shared<DAGContextCopyObj>(l, pContext2, pContext3));
+   LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[2], CMap[3]));
    //
    //-----------------------------------------------------------------------
 
@@ -2666,14 +2892,14 @@ void InitLPBranchModel2T(bool restore)
    {
       l = 10;
       shared_ptr<SpectrumOutputLayer> pl = make_shared<SpectrumOutputLayer>(len_in_branch_t, len_out_branch_t);
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
    }
    //---------------------------------------------------------------    
    // Branch to Transform Layer -----------------------------------------
    //
    {
       l = 11;
-      shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, pContext2, pContext5, false); // false -> no backprop.
+      shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, CMap[2], CMap[4], false); // false -> no backprop.
       LayerList.push_back(p_branch_t);
    }
    //
@@ -2683,7 +2909,7 @@ void InitLPBranchModel2T(bool restore)
    //
    l = 12;
    len_out_branch_t += len_out;  // out len of fully connected layer prior to Transformer layer.
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext5, pContext3));
+   LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[4], CMap[3]));
    //
    //-----------------------------------------------------------------------  
 #ifndef TRAIN_END_TO_END
@@ -2705,7 +2931,7 @@ void InitLPBranchModel2T(bool restore)
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
       pl->SetEvalPreActivationCallBack(MCB2);
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
    }
    //---------------------------------------------------------------  
    // Fully Connected Layer ---------------------------------------
@@ -2719,7 +2945,7 @@ void InitLPBranchModel2T(bool restore)
          lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
    }
    //---------------------------------------------------------------  
 
@@ -2739,7 +2965,7 @@ void InitLPBranchModel2T(bool restore)
 
       pl->SetBackpropCallBack(MCB1);
 
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext3));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[3]));
    }
    // -----------------------------------------------------------------
 #ifndef TRAIN_END_TO_END
@@ -2749,16 +2975,16 @@ void InitLPBranchModel2T(bool restore)
       l = 17;
       shared_ptr<LossL2X> pl = make_shared<LossL2X>(len_out, 1);
       // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-      LayerList.push_back(make_shared<DAGErrorLayer>(l, pl, pContext3, gpError1));
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, pl, CMap[3], EMap[0]));
    }
    //---------------------------------------------------------------------
 #endif
    // ------ Vector Composite -----------------------------------------
    //
-   // NOTE: pContext12 carries average transform parameter.  Initialize it here.
-   pContext12->v.resize(1);
+   // NOTE: C5 carries average transform parameter.  Initialize it here.
+   CMap[0].v.resize(1);
    l = 21;
-   LayerList.push_back( make_shared<DAGCompAvg>(l, pContext3, pContext12) );
+   LayerList.push_back( make_shared<DAGCompAvg>(l, CMap[3], CMap[0]) );
    //
    //-----------------------------------------------------------------------
 #endif
@@ -2772,7 +2998,7 @@ void InitLPBranchModel2T(bool restore)
       shared_ptr<CyclicVectorTransformer> pCVT = make_shared<CyclicVectorTransformer>(len_in, len_out);
       // REVIEW: Transform sanity check test.
       //pCVT->SetEvalPostActivationCallBack(MCB2);
-      LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, pContext2, pContext12)); // pContext3 holds rotation value.
+      LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, CMap[2], CMap[0])); // C5 holds rotation value.
    }
    //-----------------------------------------------------------------
 
@@ -2784,7 +3010,7 @@ void InitLPBranchModel2T(bool restore)
    int len_out_branch_1 = len_out;
    // This branch will be paired with Test1.
    l = 19;
-   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, pContext2, pContext6, false);
+   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, CMap[2], CMap[6], false);
    LayerList.push_back(p_branch1);
    //
    //-----------------------------------------------------------------------
@@ -2799,7 +3025,7 @@ void InitLPBranchModel2T(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[2]));
    }
    //l++;
    //---------------------------------------------------------------  
@@ -2814,7 +3040,7 @@ void InitLPBranchModel2T(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[2]));
    }
    //---------------------------------------------------------------      
    // Error Layer ---------------------------------------
@@ -2823,17 +3049,17 @@ void InitLPBranchModel2T(bool restore)
       l = 8;
       shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
       // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), pContext2, gpError1));
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[2], EMap[0]));
    }
 
    //---------------------------------------------------------------      
    // Branch Test Layer (Test 1) -----------------------------------------
-   // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
-   // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
+   // upper limit: read --> if you're that accurate don't bother backpropagating, not much to learn.
+   // lower limit: read --> if you're that screwed up I don't want to try to learn what you are.
    //                                                                              warm up             backprop lower limit   backprop upper limit
    l = 20;
-   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, gpError1, restore ? 0 : 6 * 1100, 0.7, 0.98));
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, gpError1, 20 * 1100, 0.0, 0.0));
+   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[1], restore ? 0 : 6 * 1100, 0.7, 0.98));
+   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[0], 20 * 1100, 0.0, 0.0));
    //
    //-----------------------------------------------------------------------
    //************************************************************************
@@ -2843,7 +3069,7 @@ void InitLPBranchModel2T(bool restore)
    //
    // NOTE: Start branch 2 at ID = 30 to give room to add to branch 1.
    l = 30;
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext7));
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[7]));
    //
    //-----------------------------------------------------------------------
 
@@ -2864,7 +3090,7 @@ void InitLPBranchModel2T(bool restore)
 
       //pl->SetBackpropCallBack(MCB);
 
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext7));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[7]));
    }
    //---------------------------------------------------------------
    // Pooling Layer ----------------------------------------------
@@ -2883,7 +3109,7 @@ void InitLPBranchModel2T(bool restore)
 #else
       shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
 #endif
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[7]));
    }
    //---------------------------------------------------------------
    // Flattening Layer --------------------------------------------
@@ -2897,7 +3123,7 @@ void InitLPBranchModel2T(bool restore)
    {
       l = 33;
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext7, pContext8)); 
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[7]));
    }
    //-----------------------------------------------------------------
    //           Transformer Layers
@@ -2906,7 +3132,7 @@ void InitLPBranchModel2T(bool restore)
    // Copy to Spectrum Context -----------------------------------------
    //
    l = 38;
-   LayerList.push_back(make_shared<DAGContextCopyObj>(l, pContext8, pContext9));
+   LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[7], CMap[8]));
    //
    //-----------------------------------------------------------------------
 
@@ -2918,14 +3144,14 @@ void InitLPBranchModel2T(bool restore)
    {
       l = 39;
       shared_ptr<SpectrumOutputLayer> pl = make_shared<SpectrumOutputLayer>(len_in_branch_t, len_out_branch_t);
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext9));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[8]));
    }
    //---------------------------------------------------------------    
    // Branch to Transform Layer -----------------------------------------
    //
    {
       l = 40;
-      shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, pContext8, pContext11, false); // false -> no backprop.
+      shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, CMap[7], CMap[9], false); // false -> no backprop.
       LayerList.push_back(p_branch_t);
    }
    //
@@ -2935,7 +3161,7 @@ void InitLPBranchModel2T(bool restore)
    //
    l = 41;
    len_out_branch_t += len_out;  // out len of fully connected layer prior to Transformer layer.
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext11, pContext9));
+   LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[9], CMap[8]));
    //
    //-----------------------------------------------------------------------  
 
@@ -2951,7 +3177,7 @@ void InitLPBranchModel2T(bool restore)
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
       pl->SetEvalPreActivationCallBack(MCB2);
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext9));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[8]));
    }
    //---------------------------------------------------------------  
    // Fully Connected Layer ---------------------------------------
@@ -2965,7 +3191,7 @@ void InitLPBranchModel2T(bool restore)
          lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext9));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[8]));
    }
    //---------------------------------------------------------------  
 
@@ -2985,14 +3211,14 @@ void InitLPBranchModel2T(bool restore)
 
       pl->SetBackpropCallBack(MCB1);
 
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext9));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[8]));
    }
    // -----------------------------------------------------------------
    // ------ Vector Composite -----------------------------------------
    //
    // NOTE: pContext4 carries average transform parameter.
    l = 34;
-   LayerList.push_back(make_shared<DAGCompAvg>(l, pContext9, pContext12));
+   LayerList.push_back(make_shared<DAGCompAvg>(l, CMap[8], CMap[0]));
    //
    //-----------------------------------------------------------------------
 #endif
@@ -3006,7 +3232,7 @@ void InitLPBranchModel2T(bool restore)
       shared_ptr<CyclicVectorTransformer> pCVT = make_shared<CyclicVectorTransformer>(len_in, len_out);
       // REVIEW: Transform sanity check test.
       //pCVT->SetEvalPostActivationCallBack(MCB2);
-      LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, pContext8, pContext12)); // pContext4 holds rotation value.
+      LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, CMap[7], CMap[0])); // C5 holds rotation value.
    }
    //-----------------------------------------------------------------
 
@@ -3016,7 +3242,7 @@ void InitLPBranchModel2T(bool restore)
 //
    l = 46;
    len_out += len_out_branch_1;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext6, pContext8));
+   LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[6], CMap[7]));
 //
 //----------------------------------------------------------------------- 
 
@@ -3033,7 +3259,7 @@ void InitLPBranchModel2T(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext8));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[7]));
    }
    //l++;
    //---------------------------------------------------------------  
@@ -3056,7 +3282,7 @@ void InitLPBranchModel2T(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext8));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[7]));
    }
    //---------------------------------------------------------------      
    // Error Layer ---------------------------------------
@@ -3065,14 +3291,590 @@ void InitLPBranchModel2T(bool restore)
       l = 38;
       shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
       // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
-      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), pContext8, gpError2));
+      LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[7], EMap[1]));
    }
 
 }
 
+void InitLPBranchModel3T(bool restore)
+{
+   INITIALIZE("LPB3\\LPB3T", optoLowPass)
+   gModelBranches = 3;
+
+
+   bool lrestore = true;
+   lrestore = restore;
+
+   //optoADAM::B1 = 0.9;
+   optoADAM::B1 = 0.7;
+   optoADAM::B2 = 0.999;
+   optoLowPass::Momentum = 0.8;
+
+   LayerList.clear();
+
+   int P1 = INPUT_ROWS;
+
+   // NOTE: Establish the context that will store the composite pose estimate.
+   //       It is fixed and does not change accross layers.
+   CMap[0].v.resize(1);
+
+   // *********************************************************************
+   //            Branch Lambda function
+   //**********************************************************************
+
+   auto fbranch = [&restore, &lrestore, &P1](int n, bool last_branch = false) {
+      // NOTE: Used by Filter Pool.
+      // REIVEW: !!!!!!!!!!!!!!!!  LOOK LOOK !!!!!!!!!!!!!!!!!!!!!!!
+      //          Set to 4,4 to test downsampling.  It has been 2,4 .
+      clSize size_kernel(2, 4);
+
+      int l = 1; // Layer label
+      int lo = n * 30;  // Layer offset
+      int b = 2 + n*4;
+
+      // Copy Start Context -----------------------------------------
+      //
+      l = 1 + lo;
+      LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[b]));
+      //
+      //-----------------------------------------------------------------------
+
+      // Convolution Layer -----------------------------------------
+      // Type: FilterLayer2D
+      clSize size_in(INPUT_ROWS, INPUT_COLS);
+      clSize size_out(INPUT_ROWS, 4);
+      clSize size_kern(INPUT_ROWS, INPUT_COLS);
+      int chn_in = 1;
+      int chn_out = 1;
+      {
+         l = 2 + lo;
+         shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
+            make_unique<actReLU>(),
+            restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+            make_shared<OPTO>(),
+            true); // No bias. true/false
+
+         //pl->SetBackpropCallBack(MCB);
+
+         LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[b]));
+      }
+      //---------------------------------------------------------------
+      // Pooling Layer ----------------------------------------------
+      // Type: poolAvg2D
+      size_in = size_out;
+      size_out.Resize(P1, 1);
+      chn_in = chn_out;
+
+      assert(!(size_in.rows % size_out.rows));
+      assert(!(size_in.cols % size_out.cols));
+      {
+         l = 3 + lo;
+#ifdef USE_FILTER_FOR_POOL
+         shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_kernel);
+         //pl->SetEvalPostActivationCallBack(MVCB);
+#else
+         shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
+#endif
+         LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[b]));
+      }
+      //---------------------------------------------------------------
+      // Flattening Layer --------------------------------------------
+      // Type: Flatten2D
+      size_in = size_out;
+      chn_in = chn_out;
+
+      int len_in = 0;
+      int len_out = size_in.rows * size_in.cols * chn_in;
+      chn_out = 1;
+      {
+         l = 4 + lo;
+         shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
+         LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[b]));
+      }
+      //-----------------------------------------------------------------
+      //           Transformer Layers
+      //---------------------------------------------------------------      
+      // 
+
+      // Copy Context2 to Spectrum Context -----------------------------------------
+      //
+      l = 9 + lo;
+      LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[b], CMap[b + 1]));
+      //
+      //-----------------------------------------------------------------------
+
+      // Spectrum Layer ---------------------------------------
+      //
+      int len_in_branch_t = len_out;
+      //int len_out_branch_t = 3 * len_out / 8;
+      int len_out_branch_t = len_out / 2;
+      {
+         l = 10 + lo;
+         shared_ptr<SpectrumOutputLayer> pl = make_shared<SpectrumOutputLayer>(len_in_branch_t, len_out_branch_t);
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      //---------------------------------------------------------------    
+      // Branch to Transform Layer -----------------------------------------
+      //
+      {
+         l = 11 + lo;
+         shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, CMap[b], CMap[b + 2], false); // false -> no backprop.
+         LayerList.push_back(p_branch_t);
+      }
+      //
+      //-----------------------------------------------------------------------
+
+      // Join Fully Connected Layer -----------------------------------------
+      //
+      l = 12 + lo;
+      len_out_branch_t += len_out;  // out len of fully connected layer prior to Transformer layer.
+      LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[b + 2], CMap[b + 1]));
+      //
+      //-----------------------------------------------------------------------  
+
+      // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+      len_in_branch_t = len_out_branch_t;
+      len_out_branch_t = 60;
+      {
+         l = 13 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in_branch_t, len_out_branch_t,
+            make_unique<actReLU>(),
+            lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         pl->SetEvalPreActivationCallBack(MCB2);
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      //---------------------------------------------------------------  
+      // Fully Connected Layer ---------------------------------------
+      // Type: ReLU
+      len_in_branch_t = len_out_branch_t;
+      len_out_branch_t = 30;
+      {
+         l = 14 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in_branch_t, len_out_branch_t,
+            make_unique<actReLU>(),
+            lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      //---------------------------------------------------------------  
+
+
+         // Fully Connected Layer ---------------------------------------
+         // Type: Linear
+      len_in_branch_t = len_out_branch_t;
+      len_out_branch_t = 1;
+      {
+         l = 15 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in_branch_t, len_out_branch_t,
+            //make_unique<actLinear>(), 
+            make_unique<actLinearEx>(),
+            lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+
+         pl->SetBackpropCallBack(MCB1);
+
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      // -----------------------------------------------------------------
+
+   // ------ Vector Composite -----------------------------------------
+   //
+   // NOTE: C0 carries average transform parameter.  Initialize it here.
+      // Numbers aer skipped to get here.
+      l = 21 + lo;
+      LayerList.push_back(make_shared<DAGCompAvg>(l, CMap[b + 1], CMap[0]));
+      //
+      //-----------------------------------------------------------------------
+
+      //---------------------------------------------------------------  
+      // Cyclic Transformer
+      //
+      len_in = len_out;
+      {
+         l = 5 + lo;
+         shared_ptr<CyclicVectorTransformer> pCVT = make_shared<CyclicVectorTransformer>(len_in, len_out);
+         // REVIEW: Transform sanity check test.
+         //pCVT->SetEvalPostActivationCallBack(MCB2);
+         LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, CMap[b], CMap[0])); // C0 holds rotation value.
+      }
+      //-----------------------------------------------------------------
+
+      //****************** End Transformer Layer ***********************************************     
+      // Join Fully Connected Layer -----------------------------------------
+      //
+      if (n > 0) {
+         l = 22 + lo;
+         LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[b - 1], CMap[b]));
+      }
+      //
+      //----------------------------------------------------------------------- 
+      //--------- setup the fully connected network -------------------------------------------------------------------------
+      // 
+      shared_ptr<DAGBranchObj> p_branch1;
+      if (!last_branch) {
+         // Out to Branch 2 Fully Connected Layer -----------------------------------------
+         //
+         // This branch will be paired with Test1.
+         l = 23 + lo;
+         p_branch1 = make_shared<DAGBranchObj>(l, CMap[b], CMap[b + 3], false);
+         LayerList.push_back(p_branch1);
+         //
+         //-----------------------------------------------------------------------
+      }
+      // Fully Connected Layer ---------------------------------------
+      // Type: ReLU
+      len_in = (n + 1) * P1;
+      len_out = len_in >> 1;
+      {
+         l = 6 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out,
+            make_unique<actReLU>(),
+            restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[b]));
+      }
+      //l++;
+      //---------------------------------------------------------------  
+
+      // Fully Connected Layer ---------------------------------------
+      // Type: SoftMAX
+      len_in = len_out;
+      len_out = 10;
+      {
+         l = 7 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMaxEx>(),
+            restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[b]));
+      }
+      //---------------------------------------------------------------      
+      // Error Layer ---------------------------------------
+      // Type: LossCrossEntropy
+      {
+         l = 8 + lo;
+         shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
+         // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
+         LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[b], EMap[n]));
+      }
+
+      //---------------------------------------------------------------      
+      if (!last_branch) {
+         // Branch Test Layer (Test 1) -----------------------------------------
+         // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
+         // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
+         //                                                                              warm up             backprop lower limit   backprop upper limit
+         l = 24 + lo;
+         //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[e], restore ? 0 : 6 * 1100, 0.7, 0.98));
+         LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[n], 20 * 1100, 0.0, 0.0));
+         //
+         //-----------------------------------------------------------------------
+      }
+   };
+
+   fbranch(0);
+   fbranch(1);
+   fbranch(2,true); // last branch = true
+}
+
+void InitLPBranchModel4T(bool restore)
+{
+   INITIALIZE("LPB4\\LPB4T", optoLowPass)
+   gModelBranches = 4;
+
+   bool lrestore = true;
+   lrestore = restore;
+
+   //optoADAM::B1 = 0.9;
+   optoADAM::B1 = 0.7;
+   optoADAM::B2 = 0.999;
+   optoLowPass::Momentum = 0.8;
+
+   LayerList.clear();
+
+   int P1 = INPUT_ROWS;
+
+   // NOTE: Establish the context that will store the composite pose estimate.
+   //       It is fixed and does not change accross layers.
+   CMap[0].v.resize(1);
+
+   // *********************************************************************
+   //            Branch Lambda function
+   //**********************************************************************
+
+   auto fbranch = [&restore, &lrestore, &P1](int n, bool last_branch = false) {
+      // NOTE: Used by Filter Pool.
+      // REIVEW: !!!!!!!!!!!!!!!!  LOOK LOOK !!!!!!!!!!!!!!!!!!!!!!!
+      //          Set to 4,4 to test downsampling.  It has been 2,4 .
+      clSize size_kernel(2, 4);
+
+      int l = 1; // Layer label
+      int lo = n * 30;  // Layer offset
+      int b = 2 + n * 4;
+
+      // Copy Start Context -----------------------------------------
+      //
+      l = 1 + lo;
+      LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[b]));
+      //
+      //-----------------------------------------------------------------------
+
+      // Convolution Layer -----------------------------------------
+      // Type: FilterLayer2D
+      clSize size_in(INPUT_ROWS, INPUT_COLS);
+      clSize size_out(INPUT_ROWS, 4);
+      clSize size_kern(INPUT_ROWS, INPUT_COLS);
+      int chn_in = 1;
+      int chn_out = 1;
+      {
+         l = 2 + lo;
+         shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
+            make_unique<actReLU>(),
+            restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
+            make_shared<OPTO>(),
+            true); // No bias. true/false
+
+         //pl->SetBackpropCallBack(MCB);
+
+         LayerList.push_back(make_shared<DAGConvoLayerObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[b]));
+      }
+      //---------------------------------------------------------------
+      // Pooling Layer ----------------------------------------------
+      // Type: poolAvg2D
+      size_in = size_out;
+      size_out.Resize(P1, 1);
+      chn_in = chn_out;
+
+      assert(!(size_in.rows % size_out.rows));
+      assert(!(size_in.cols % size_out.cols));
+      {
+         l = 3 + lo;
+#ifdef USE_FILTER_FOR_POOL
+         shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_kernel);
+         //pl->SetEvalPostActivationCallBack(MVCB);
+#else
+         shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
+#endif
+         LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[b]));
+      }
+      //---------------------------------------------------------------
+      // Flattening Layer --------------------------------------------
+      // Type: Flatten2D
+      size_in = size_out;
+      chn_in = chn_out;
+
+      int len_in = 0;
+      int len_out = size_in.rows * size_in.cols * chn_in;
+      chn_out = 1;
+      {
+         l = 4 + lo;
+         shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
+         LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[b]));
+      }
+      //-----------------------------------------------------------------
+      //           Transformer Layers
+      //---------------------------------------------------------------      
+      // 
+
+      // Copy Context2 to Spectrum Context -----------------------------------------
+      //
+      l = 9 + lo;
+      LayerList.push_back(make_shared<DAGContextCopyObj>(l, CMap[b], CMap[b + 1]));
+      //
+      //-----------------------------------------------------------------------
+
+      // Spectrum Layer ---------------------------------------
+      //
+      int len_in_branch_t = len_out;
+      //int len_out_branch_t = 3 * len_out / 8;
+      int len_out_branch_t = len_out / 2;
+      {
+         l = 10 + lo;
+         shared_ptr<SpectrumOutputLayer> pl = make_shared<SpectrumOutputLayer>(len_in_branch_t, len_out_branch_t);
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      //---------------------------------------------------------------    
+      // Branch to Transform Layer -----------------------------------------
+      //
+      {
+         l = 11 + lo;
+         shared_ptr<DAGBranchObj> p_branch_t = make_shared<DAGBranchObj>(l, CMap[b], CMap[b + 2], false); // false -> no backprop.
+         LayerList.push_back(p_branch_t);
+      }
+      //
+      //-----------------------------------------------------------------------
+
+      // Join Fully Connected Layer -----------------------------------------
+      //
+      l = 12 + lo;
+      len_out_branch_t += len_out;  // out len of fully connected layer prior to Transformer layer.
+      LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[b + 2], CMap[b + 1]));
+      //
+      //-----------------------------------------------------------------------  
+
+      // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+      len_in_branch_t = len_out_branch_t;
+      len_out_branch_t = 60;
+      {
+         l = 13 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in_branch_t, len_out_branch_t,
+            make_unique<actReLU>(),
+            lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         pl->SetEvalPreActivationCallBack(MCB2);
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      //---------------------------------------------------------------  
+      // Fully Connected Layer ---------------------------------------
+      // Type: ReLU
+      len_in_branch_t = len_out_branch_t;
+      len_out_branch_t = 30;
+      {
+         l = 14 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in_branch_t, len_out_branch_t,
+            make_unique<actReLU>(),
+            lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      //---------------------------------------------------------------  
+
+
+         // Fully Connected Layer ---------------------------------------
+         // Type: Linear
+      len_in_branch_t = len_out_branch_t;
+      len_out_branch_t = 1;
+      {
+         l = 15 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in_branch_t, len_out_branch_t,
+            //make_unique<actLinear>(), 
+            make_unique<actLinearEx>(),
+            lrestore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+
+         pl->SetBackpropCallBack(MCB1);
+
+         LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[b + 1]));
+      }
+      // -----------------------------------------------------------------
+
+   // ------ Vector Composite -----------------------------------------
+   //
+   // NOTE: C0 carries average transform parameter.  Initialize it here.
+      // Numbers aer skipped to get here.
+      l = 21 + lo;
+      LayerList.push_back(make_shared<DAGCompAvg>(l, CMap[b + 1], CMap[0]));
+      //
+      //-----------------------------------------------------------------------
+
+      //---------------------------------------------------------------  
+      // Cyclic Transformer
+      //
+      len_in = len_out;
+      {
+         l = 5 + lo;
+         shared_ptr<CyclicVectorTransformer> pCVT = make_shared<CyclicVectorTransformer>(len_in, len_out);
+         // REVIEW: Transform sanity check test.
+         //pCVT->SetEvalPostActivationCallBack(MCB2);
+         LayerList.push_back(make_shared<DAGCyclicTransformLayer>(l, pCVT, CMap[b], CMap[0])); // C0 holds rotation value.
+      }
+      //-----------------------------------------------------------------
+
+      //****************** End Transformer Layer ***********************************************     
+      // Join Fully Connected Layer -----------------------------------------
+      //
+      if (n > 0) {
+         l = 22 + lo;
+         LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[b - 1], CMap[b]));
+      }
+      //
+      //----------------------------------------------------------------------- 
+      //--------- setup the fully connected network -------------------------------------------------------------------------
+      // 
+      shared_ptr<DAGBranchObj> p_branch1;
+      if (!last_branch) {
+         // Out to Branch 2 Fully Connected Layer -----------------------------------------
+         //
+         // This branch will be paired with Test1.
+         l = 23 + lo;
+         p_branch1 = make_shared<DAGBranchObj>(l, CMap[b], CMap[b + 3], false);
+         LayerList.push_back(p_branch1);
+         //
+         //-----------------------------------------------------------------------
+      }
+      // Fully Connected Layer ---------------------------------------
+      // Type: ReLU
+      len_in = (n + 1) * P1;
+      len_out = len_in >> 1;
+      {
+         l = 6 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out,
+            make_unique<actReLU>(),
+            restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[b]));
+      }
+      //l++;
+      //---------------------------------------------------------------  
+
+      // Fully Connected Layer ---------------------------------------
+      // Type: SoftMAX
+      len_in = len_out;
+      len_out = 10;
+      {
+         l = 7 + lo;
+         shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMaxEx>(),
+            restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+            dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+            make_shared<OPTO>());
+         LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[b]));
+      }
+      //---------------------------------------------------------------      
+      // Error Layer ---------------------------------------
+      // Type: LossCrossEntropy
+      {
+         l = 8 + lo;
+         shared_ptr<LossCrossEntropyEx> pl = make_shared<LossCrossEntropyEx>(len_out, 1);
+         // DAGErrorLayer(shared_ptr<iLossLayer> _pLayer, shared_ptr<NetContext> _pContext, shared_ptr<ErrorContext> _pEContext) 
+         LayerList.push_back(make_shared<DAGErrorLayer>(l, static_pointer_cast<iLossLayer>(pl), CMap[b], EMap[n]));
+      }
+
+      //---------------------------------------------------------------      
+      if (!last_branch) {
+         // Branch Test Layer (Test 1) -----------------------------------------
+         // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
+         // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
+         //                                                                              warm up             backprop lower limit   backprop upper limit
+         l = 24 + lo;
+         //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[e], restore ? 0 : 6 * 1100, 0.7, 0.98));
+         LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[n], 20 * 1100, 0.0, 0.0));
+         //
+         //-----------------------------------------------------------------------
+      }
+   };
+
+   fbranch(0);
+   fbranch(1);
+   fbranch(2);
+   fbranch(3, true); // last branch = true
+}
+
 void InitLPBranchModel5(bool restore)
 {
-   INITIALIZE("LPB5\\LPB5", optoADAM)
+   INITIALIZE("LPB5\\LPB5", optoLowPass)
    gModelBranches = 3;
 
    optoADAM::B1 = 0.9;
@@ -3082,26 +3884,14 @@ void InitLPBranchModel5(bool restore)
    int l = 1;
    LayerList.clear();
 
-   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
-// REVIEW: Could redistribute the other copies.  To lazy right now.
+   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    // Copy Start Context -----------------------------------------
    //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext1));
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[2]));
    l++;
    //
    //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext4));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext7));
-   l++;
-   //
-   //-----------------------------------------------------------------------
+
    // Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
    clSize size_in(INPUT_ROWS, INPUT_COLS);
@@ -3122,7 +3912,7 @@ void InitLPBranchModel5(bool restore)
          true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
 
       pl->SetEvalPreActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[2]));
    }
    l++;
    //---------------------------------------------------------------
@@ -3137,7 +3927,7 @@ void InitLPBranchModel5(bool restore)
    //   shared_ptr<poolMax2D> pl = make_shared<poolMax2D>(size_in, chn_in, size_out);
    //   //pl->SetEvalPostActivationCallBack(MCB);
 
-   //   LayerList.push_back(make_shared<DAGConvoLayerObj>(static_pointer_cast<iConvoLayer>(pl), pContext1));
+   //   LayerList.push_back(make_shared<DAGConvoLayerObj>(static_pointer_cast<iConvoLayer>(pl), CMap[2]));
    //}
    //l++;
    //---------------------------------------------------------------
@@ -3153,7 +3943,7 @@ void InitLPBranchModel5(bool restore)
       shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
       //pl->SetEvalPostActivationCallBack(MCB);
 
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[2]));
    }
    l++;
    //---------------------------------------------------------------
@@ -3165,7 +3955,7 @@ void InitLPBranchModel5(bool restore)
    chn_out = 1;
    {
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext1, pContext2));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), CMap[2]));
    }
    l++;
    //---------------------------------------------------------------      
@@ -3176,7 +3966,7 @@ void InitLPBranchModel5(bool restore)
    //
    int len_out_branch_1 = len_out;
    // This branch will be paired with Test1.
-   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, pContext2, pContext3, false);
+   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, CMap[2], CMap[3], false);
    LayerList.push_back(p_branch1);
    l++;
    //
@@ -3191,7 +3981,7 @@ void InitLPBranchModel5(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[2]));
    }
    l++;
    //---------------------------------------------------------------  
@@ -3205,20 +3995,21 @@ void InitLPBranchModel5(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), CMap[2]));
    }
    l++;
    //---------------------------------------------------------------      
    // Error Layer ---------------------------------------
    // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext2, gpError1));
+   EMap.emplace(1, 1);
+   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropyEx>(len_out, 1), CMap[2], EMap[1] ));
    l++;
    //---------------------------------------------------------------      
    // Branch Test Layer (Test 1) -----------------------------------------
    // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
    // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
    //                                                                              warm up             backprop lower limit   backprop upper limit
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, gpError1, restore ? 0 : 6 * 1100, 0.7, 0.98));
+   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, EMap[1], restore ? 0 : 6 * 1100, 0.7, 0.98));
    l++;
    //
    //-----------------------------------------------------------------------
@@ -3228,1258 +4019,11 @@ void InitLPBranchModel5(bool restore)
    //************************************************************************
    //              Branch 2
    //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   kern_per_chn = 1;
-   chn_in = 1;
-   chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   //size_in = size_out;
-   //size_out.Resize(INPUT_ROWS, 1);
-   //chn_in = chn_out;
-
-   //assert(!(size_in.rows% size_out.rows));
-   //assert(!(size_in.cols% size_out.cols));
-   //{
-   //   shared_ptr<poolMax2D> pl = make_shared<poolMax2D>(size_in, chn_in, size_out);
-   //   //pl->SetEvalPostActivationCallBack(MCB);
-
-   //   LayerList.push_back(make_shared<DAGConvoLayerObj>(pl, pContext4));
-   //}
-   //l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   size_in = size_out;
-   //size_out.Resize(INPUT_ROWS >> 1, 1);
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   {
-      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
-      //pl->SetEvalPostActivationCallBack(MCB);
-
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext4, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_1;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext3, pContext5));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 2 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_2 = len_out;
-   // This branch will be paired with Test2.
-   shared_ptr<DAGBranchObj> p_branch2 = make_shared<DAGBranchObj>(l, pContext5, pContext6, false);
-   LayerList.push_back(p_branch2);
-   l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 32; //64;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------  
-      // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   //len_in = len_out;
-   //len_out = 48;
-   //{
-   //   shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-   //      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-   //      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-   //      make_shared<OPTO>());
-   //   LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   //}
-   //l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext5, gpError2));
-   l++;
-   // Branch Test Layer (Test 2) -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2, restore ? 0 : 6 * 1100 , 0.6, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //************************************************************************
-   //              Branch 3
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   kern_per_chn = 1;
-   chn_in = 1;
-   chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   //size_in = size_out;
-   //size_out.Resize(INPUT_ROWS, 1);
-   //chn_in = chn_out;
-
-   //assert(!(size_in.rows% size_out.rows));
-   //assert(!(size_in.cols% size_out.cols));
-   //{
-   //   shared_ptr<poolMax2D> pl = make_shared<poolMax2D>(size_in, chn_in, size_out);
-   //   //pl->SetEvalPostActivationCallBack(MCB);
-
-   //   LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   //}
-   //l++;
-   //---------------------------------------------------------------
-   // Pooling Layer ----------------------------------------------
-   size_in = size_out;
-   //size_out.Resize(INPUT_ROWS >> 1, 1);
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows% size_out.rows));
-   assert(!(size_in.cols% size_out.cols));
-   {
-      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
-      //pl->SetEvalPostActivationCallBack(MCB);
-
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext7, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_2;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext6, pContext8));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 4 Fully Connected Layer -----------------------------------------
-   //
-   //int len_out_branch_4 = len_out;
-   // This branch will be paired with Test2.
-   //shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(pContext8, pContext9, false);
-   //LayerList.push_back(l, p_branch3);
-   //l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 64; // 128;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-      // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   //len_in = len_out;
-   //len_out = 48;
-   //{
-   //   shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-   //      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-   //      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-   //      make_shared<OPTO>());
-   //   LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   //}
-   //l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext8, gpError3));
-   l++;
-   // Branch Test Layer (Test 3) -----------------------------------------
-   //
-   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2));
-   //l++;
-   //
-   //-----------------------------------------------------------------------
-
-}
-
-void InitLPBranchModel6(bool restore)
-{
-   INITIALIZE("LPB6\\LPB6", optoLowPass)
-   gModelBranches = 4;
-
-   optoADAM::B1 = 0.9;
-   optoADAM::B2 = 0.999;
-   optoLowPass::Momentum = 0.75;
-
-   int l = 1;
-   LayerList.clear();
-
-   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
-// REVIEW: Could redistribute the other copies.  To lazy right now.
-// Copy Start Context -----------------------------------------
-//
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext1));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext4));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext7));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext10));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   clSize size_in(INPUT_ROWS, INPUT_COLS);
-   clSize size_out(INPUT_ROWS, 4);
-   // Use this to have a look at the entire correlation plane.
-   //clSize size_out(INPUT_ROWS, INPUT_COLS);
-   clSize size_kern(INPUT_ROWS, INPUT_COLS);
-   int kern_per_chn = 1;
-   int chn_in = 1;
-   int chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-
-      pl->SetEvalPreActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
-   }
-   l++;
-   //---------------------------------------------------------------
-
-   // Pooling Layer ----------------------------------------------
-   size_in = size_out;
-   //size_out.Resize(INPUT_ROWS >> 1, 1);
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   {
-      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
-      //pl->SetEvalPostActivationCallBack(MCB);
-
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   int len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext1, pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // 
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Branch 1 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_1 = len_out;
-   // This branch will be paired with Test1.
-   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, pContext2, pContext3, false);
-   LayerList.push_back(p_branch1);
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   int len_in = len_out;
-   len_out = 16;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext2, gpError1));
-   l++;
-   //---------------------------------------------------------------      
-   // Branch Test Layer (Test 1) -----------------------------------------
-   // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
-   // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
-   //                                                                              warm up             backprop lower limit   backprop upper limit
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, gpError1, restore ? 0 : 6 * 1100, 0.7, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //return;
-
-   //************************************************************************
-   //              Branch 2
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   kern_per_chn = 1;
-   chn_in = 1;
-   chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   }
-   l++;
-   //---------------------------------------------------------------
-
-   // Pooling Layer ----------------------------------------------
-   size_in = size_out;
-   //size_out.Resize(INPUT_ROWS >> 1, 1);
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   {
-      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
-      //pl->SetEvalPostActivationCallBack(MCB);
-
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext4, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_1;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext3, pContext5));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 2 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_2 = len_out;
-   // This branch will be paired with Test2.
-   shared_ptr<DAGBranchObj> p_branch2 = make_shared<DAGBranchObj>(l, pContext5, pContext6, false);
-   LayerList.push_back(p_branch2);
-   l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 32; //64;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext5, gpError2));
-   l++;
-   // Branch Test Layer (Test 2) -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2, restore ? 0 : 6 * 1100, 0.6, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //************************************************************************
-   //              Branch 3
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   kern_per_chn = 1;
-   chn_in = 1;
-   chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
-   }
-   l++;
-   //---------------------------------------------------------------
-
-   // Pooling Layer ----------------------------------------------
-   size_in = size_out;
-   //size_out.Resize(INPUT_ROWS >> 1, 1);
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows % size_out.rows));
-   assert(!(size_in.cols % size_out.cols));
-   {
-      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
-      //pl->SetEvalPostActivationCallBack(MCB);
-
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext7, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_2;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext6, pContext8));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 3 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_3 = len_out;
-   // This branch will be paired with Test2.
-   shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(l, pContext8, pContext9, false);
-   LayerList.push_back(p_branch3);
-   l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 64; // 128;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext8, gpError3));
-   l++;
-   // Branch Test Layer (Test 3) -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch3, gpError3, restore ? 0 : 6 * 1100, 0.6, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //************************************************************************
-   //              Branch 4
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   kern_per_chn = 1;
-   chn_in = 1;
-   chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext10));
-   }
-   l++;
-   //---------------------------------------------------------------
-
-   // Pooling Layer ----------------------------------------------
-   size_in = size_out;
-   //size_out.Resize(INPUT_ROWS >> 1, 1);
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   assert(!(size_in.rows% size_out.rows));
-   assert(!(size_in.cols% size_out.cols));
-   {
-      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
-      //pl->SetEvalPostActivationCallBack(MCB);
-
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext10));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext10, pContext11));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_3;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext9, pContext11));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 4 Fully Connected Layer -----------------------------------------
-   //
-   //int len_out_branch_4 = len_out;
-   // This branch will be paired with Test2.
-   //shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(pContext11, pContext , false);
-   //LayerList.push_back(l, p_branch3);
-   //l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 64; // 128;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext11));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext11));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext11, gpError4));
-   l++;
-   // Branch Test Layer (Test 3) -----------------------------------------
-   //
-   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch3, gpError3, restore ? 0 : 6 * 1100, 0.6, 0.98));
-   //l++;
-   //
-   //-----------------------------------------------------------------------
-
-
-}
-
-void InitLPBranchModel7(bool restore)
-{
-   INITIALIZE("LPB7\\LPB7", optoADAM)
-   gModelBranches = 3;
-
-   optoADAM::B1 = 0.9;
-   optoADAM::B2 = 0.999;
-   optoLowPass::Momentum = 0.8;
-
-   clSize size_kernel(4, 4);
-
-   int l = 1;
-   LayerList.clear();
-
-   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
-// REVIEW: Could redistribute the other copies.  To lazy right now.
-// Copy Start Context -----------------------------------------
-//
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext1));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext4));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext7));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   clSize size_in(INPUT_ROWS, INPUT_COLS);
-   clSize size_out(INPUT_ROWS, 4);
-   // Use this to have a look at the entire correlation plane.
-   //clSize size_out(INPUT_ROWS, INPUT_COLS);
-   clSize size_kern(INPUT_ROWS, INPUT_COLS);
-   int chn_in = 1;
-   int chn_out = 1;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-
-      pl->SetEvalPreActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Average Layer ----------------------------------------------
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_kernel);
-      pl->SetEvalPostActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
-   }
-   l++;
-   //---------------------------------------------------------------
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   int len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext1, pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // 
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Branch 1 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_1 = len_out;
-   // This branch will be paired with Test1.
-   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, pContext2, pContext3, false);
-   LayerList.push_back(p_branch1);
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   int len_in = len_out;
-   len_out = 16;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext2, gpError1));
-   l++;
-   //---------------------------------------------------------------      
-   // Branch Test Layer (Test 1) -----------------------------------------
-   // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
-   // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
-   //                                                                              warm up             backprop lower limit   backprop upper limit
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, gpError1, restore ? 0 : 6 * 1100, 0.7, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //return;
-
-   //************************************************************************
-   //              Branch 2
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   chn_in = 1;
-   chn_out = 1;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Average Layer ----------------------------------------------
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_kernel);
-      //pl->SetEvalPostActivationCallBack(MCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext4, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_1;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext3, pContext5));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 2 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_2 = len_out;
-   // This branch will be paired with Test2.
-   shared_ptr<DAGBranchObj> p_branch2 = make_shared<DAGBranchObj>(l, pContext5, pContext6, false);
-   LayerList.push_back(p_branch2);
-   l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 32; //64;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------  
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext5, gpError2));
-   l++;
-   // Branch Test Layer (Test 2) -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2, restore ? 0 : 6 * 1100, 0.6, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //************************************************************************
-   //              Branch 3
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   chn_in = 1;
-   chn_out = 1;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, chn_out,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Average Layer ----------------------------------------------
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_kernel);
-      //pl->SetEvalPostActivationCallBack(MCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext7, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_2;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext6, pContext8));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 4 Fully Connected Layer -----------------------------------------
-   //
-   //int len_out_branch_4 = len_out;
-   // This branch will be paired with Test2.
-   //shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(pContext8, pContext9, false);
-   //LayerList.push_back(l, p_branch3);
-   //l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 64; // 128;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-      // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   //len_in = len_out;
-   //len_out = 48;
-   //{
-   //   shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-   //      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-   //      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-   //      make_shared<OPTO>());
-   //   LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   //}
-   //l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext8, gpError3));
-   l++;
-   // Branch Test Layer (Test 3) -----------------------------------------
-   //
-   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2));
-   //l++;
-   //
-   //-----------------------------------------------------------------------
-
-}
-void InitLPBranchModel8(bool restore)
-{
-   INITIALIZE("LPB8\\LPB8", optoADAM)
-   gModelBranches = 4;
-
-   optoADAM::B1 = 0.9;
-   optoADAM::B2 = 0.999;
-   optoLowPass::Momentum = 0.75;
-
-   clSize size_avg_kernel(4, 4);
-
-   int l = 1;
-   LayerList.clear();
-
-   //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
-   // REVIEW: Could redistribute the other copies.  To lazy right now.
    // Copy Start Context -----------------------------------------
-//
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContextStart, pContext1));
+   //
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[4]));
    l++;
    //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext4));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext7));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Copy Input Layer -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, pContext1, pContext10));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-   // Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   clSize size_in(INPUT_ROWS, INPUT_COLS);
-   clSize size_out(INPUT_ROWS, 4);
-   // Use this to have a look at the entire correlation plane.
-   //clSize size_out(INPUT_ROWS, INPUT_COLS);
-   clSize size_kern(INPUT_ROWS, INPUT_COLS);
-   int kern_per_chn = 1;
-   int chn_in = 1;
-   int chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-
-      pl->SetEvalPreActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Average Layer ----------------------------------------------
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_avg_kernel);
-      pl->SetEvalPostActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext1));
-   }
-   l++;
-   //---------------------------------------------------------------
-
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   int len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, static_pointer_cast<iConvoLayer>(pl), pContext1, pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // 
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Branch 1 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_1 = len_out;
-   // This branch will be paired with Test1.
-   shared_ptr<DAGBranchObj> p_branch1 = make_shared<DAGBranchObj>(l, pContext2, pContext3, false);
-   LayerList.push_back(p_branch1);
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   int len_in = len_out;
-   len_out = 16;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, static_pointer_cast<iLayer>(pl), pContext2));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext2, gpError1));
-   l++;
-   //---------------------------------------------------------------      
-   // Branch Test Layer (Test 1) -----------------------------------------
-   // upper limit: read --> if your that accurate don't bother backpropagating, not much to learn.
-   // lower limit: read --> if your that screwed up I don't want to try to learn what you are.
-   //                                                                              warm up             backprop lower limit   backprop upper limit
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch1, gpError1, restore ? 0 : 6 * 1100, 0.7, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //return;
-
-   //************************************************************************
-   //              Branch 2
    //-----------------------------------------------------------------------
    // Branch 2 Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
@@ -4497,23 +4041,41 @@ void InitLPBranchModel8(bool restore)
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
          make_shared<OPTO>(),
          true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[4]));
    }
    l++;
    //---------------------------------------------------------------
-      // Average Layer ----------------------------------------------
+   // Pooling Layer ----------------------------------------------
+   //size_in = size_out;
+   //size_out.Resize(INPUT_ROWS, 1);
+   //chn_in = chn_out;
+
+   //assert(!(size_in.rows% size_out.rows));
+   //assert(!(size_in.cols% size_out.cols));
+   //{
+   //   shared_ptr<poolMax2D> pl = make_shared<poolMax2D>(size_in, chn_in, size_out);
+   //   //pl->SetEvalPostActivationCallBack(MCB);
+
+   //   LayerList.push_back(make_shared<DAGConvoLayerObj>(pl, CMap[4]));
+   //}
+   //l++;
+   //---------------------------------------------------------------
+   // Pooling Layer ----------------------------------------------
    size_in = size_out;
+   //size_out.Resize(INPUT_ROWS >> 1, 1);
    size_out.Resize(INPUT_ROWS, 1);
    chn_in = chn_out;
 
+   assert(!(size_in.rows % size_out.rows));
+   assert(!(size_in.cols % size_out.cols));
    {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_avg_kernel);
-      pl->SetEvalPostActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext4));
+      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
+      //pl->SetEvalPostActivationCallBack(MCB);
+
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[4]));
    }
    l++;
    //---------------------------------------------------------------
-
    // Flattening Layer --------------------------------------------
    // Type: Flatten2D
    size_in = size_out;
@@ -4522,7 +4084,7 @@ void InitLPBranchModel8(bool restore)
    chn_out = 1;
    {
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext4, pContext5));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[4]));
    }
    l++;
    //---------------------------------------------------------------  
@@ -4530,7 +4092,7 @@ void InitLPBranchModel8(bool restore)
    // Join Fully Connected Layer -----------------------------------------
    //
    len_out += len_out_branch_1;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext3, pContext5));
+   LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[3], CMap[4]));
    l++;
    //
    //----------------------------------------------------------------------- 
@@ -4538,7 +4100,7 @@ void InitLPBranchModel8(bool restore)
    //
    int len_out_branch_2 = len_out;
    // This branch will be paired with Test2.
-   shared_ptr<DAGBranchObj> p_branch2 = make_shared<DAGBranchObj>(l, pContext5, pContext6, false);
+   shared_ptr<DAGBranchObj> p_branch2 = make_shared<DAGBranchObj>(l, CMap[4], CMap[5], false);
    LayerList.push_back(p_branch2);
    l++;
    //
@@ -4554,9 +4116,22 @@ void InitLPBranchModel8(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[4]));
    }
    l++;
+   //---------------------------------------------------------------  
+      // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+   //len_in = len_out;
+   //len_out = 48;
+   //{
+   //   shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
+   //      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+   //      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+   //      make_shared<OPTO>());
+   //   LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[4]));
+   //}
+   //l++;
    //---------------------------------------------------------------  
 
    // Fully Connected Layer ---------------------------------------
@@ -4568,23 +4143,30 @@ void InitLPBranchModel8(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext5));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[4]));
    }
    l++;
    //---------------------------------------------------------------      
    // Error Layer ---------------------------------------
    // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext5, gpError2));
+   EMap.emplace(2, 2);
+   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropyEx>(len_out, 1), CMap[4], EMap[2]));
    l++;
    // Branch Test Layer (Test 2) -----------------------------------------
    //
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2, restore ? 0 : 6 * 1100, 0.6, 0.98));
+   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, EMap[2], restore ? 0 : 6 * 1100 , 0.6, 0.98));
    l++;
    //
    //-----------------------------------------------------------------------
 
    //************************************************************************
    //              Branch 3
+   // Copy Start Context -----------------------------------------
+   //
+   LayerList.push_back(make_shared<DAGConvoContextCopyObj>(l, CMap[1], CMap[6]));
+   l++;
+   //
+   //-----------------------------------------------------------------------
    //-----------------------------------------------------------------------
    // Branch 2 Convolution Layer -----------------------------------------
    // Type: FilterLayer2D
@@ -4602,19 +4184,38 @@ void InitLPBranchModel8(bool restore)
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
          make_shared<OPTO>(),
          true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[6]));
    }
    l++;
    //---------------------------------------------------------------
-   // Average Layer ----------------------------------------------
+   // Pooling Layer ----------------------------------------------
+   //size_in = size_out;
+   //size_out.Resize(INPUT_ROWS, 1);
+   //chn_in = chn_out;
+
+   //assert(!(size_in.rows% size_out.rows));
+   //assert(!(size_in.cols% size_out.cols));
+   //{
+   //   shared_ptr<poolMax2D> pl = make_shared<poolMax2D>(size_in, chn_in, size_out);
+   //   //pl->SetEvalPostActivationCallBack(MCB);
+
+   //   LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[6]));
+   //}
+   //l++;
+   //---------------------------------------------------------------
+   // Pooling Layer ----------------------------------------------
    size_in = size_out;
+   //size_out.Resize(INPUT_ROWS >> 1, 1);
    size_out.Resize(INPUT_ROWS, 1);
    chn_in = chn_out;
 
+   assert(!(size_in.rows% size_out.rows));
+   assert(!(size_in.cols% size_out.cols));
    {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_avg_kernel);
-      pl->SetEvalPostActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext7));
+      shared_ptr<poolAvg2D> pl = make_shared<poolAvg2D>(size_in, chn_in, size_out);
+      //pl->SetEvalPostActivationCallBack(MCB);
+
+      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, CMap[6]));
    }
    l++;
    //---------------------------------------------------------------
@@ -4626,7 +4227,7 @@ void InitLPBranchModel8(bool restore)
    chn_out = 1;
    {
       shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext7, pContext8));
+      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, CMap[6]));
    }
    l++;
    //---------------------------------------------------------------  
@@ -4634,112 +4235,7 @@ void InitLPBranchModel8(bool restore)
    // Join Fully Connected Layer -----------------------------------------
    //
    len_out += len_out_branch_2;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext6, pContext8));
-   l++;
-   //
-   //----------------------------------------------------------------------- 
-   // Branch 3 Fully Connected Layer -----------------------------------------
-   //
-   int len_out_branch_3 = len_out;
-   // This branch will be paired with Test2.
-   shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(l, pContext8, pContext9, false);
-   LayerList.push_back(p_branch3);
-   l++;
-   //
-   //-----------------------------------------------------------------------    
-   //--------- setup the fully connected network -------------------------------------------------------------------------
-   // 
-   // Fully Connected Layer ---------------------------------------
-   // Type: ReLU
-   len_in = len_out;
-   len_out = 64; // 128;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Fully Connected Layer ---------------------------------------
-   // Type: SoftMAX
-   len_in = len_out;
-   len_out = 10;
-   {
-      shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actSoftMax>(),
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
-         make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext8));
-   }
-   l++;
-   //---------------------------------------------------------------      
-   // Error Layer ---------------------------------------
-   // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext8, gpError3));
-   l++;
-   // Branch Test Layer (Test 3) -----------------------------------------
-   //
-   LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch3, gpError3, restore ? 0 : 6 * 1100, 0.6, 0.98));
-   l++;
-   //
-   //-----------------------------------------------------------------------
-
-   //************************************************************************
-   //              Branch 4
-   //-----------------------------------------------------------------------
-   // Branch 2 Convolution Layer -----------------------------------------
-   // Type: FilterLayer2D
-   size_in.Resize(INPUT_ROWS, INPUT_COLS);
-   size_out.Resize(INPUT_ROWS, 4);
-   size_kern.Resize(INPUT_ROWS, INPUT_COLS);
-   kern_per_chn = 1;
-   chn_in = 1;
-   chn_out = kern_per_chn * chn_in;
-   {
-      shared_ptr<FilterLayer2D> pl = make_shared<FilterLayer2D>(size_in, chn_in, size_out, size_kern, kern_per_chn,
-         make_unique<actReLU>(),
-         //make_unique<actLinear>(), 
-         restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
-         dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, chn_in)),
-         make_shared<OPTO>(),
-         true); // No bias. true/false  - REVIEW: Should flip the meaning of this switch.
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext10));
-   }
-   l++;
-   //---------------------------------------------------------------
-
-   // Average Layer ----------------------------------------------
-   size_in = size_out;
-   size_out.Resize(INPUT_ROWS, 1);
-   chn_in = chn_out;
-
-   {
-      shared_ptr<Filter> pl = make_shared<Filter>(size_in, chn_in, size_out, size_avg_kernel);
-      pl->SetEvalPostActivationCallBack(MVCB);
-      LayerList.push_back(make_shared<DAGConvoLayerObj>(l, pl, pContext10));
-   }
-   l++;
-   //---------------------------------------------------------------
-   // Flattening Layer --------------------------------------------
-   // Type: Flatten2D
-   size_in = size_out;
-   chn_in = chn_out;
-   len_out = size_in.rows * size_in.cols * chn_in;
-   chn_out = 1;
-   {
-      shared_ptr<Flatten2D> pl = make_shared<Flatten2D>(size_in, chn_in);
-      LayerList.push_back(make_shared<DAGFlattenObj>(l, pl, pContext10, pContext11));
-   }
-   l++;
-   //---------------------------------------------------------------  
-
-   // Join Fully Connected Layer -----------------------------------------
-   //
-   len_out += len_out_branch_3;
-   LayerList.push_back(make_shared<DAGJoinObj>(l, pContext9, pContext11));
+   LayerList.push_back(make_shared<DAGJoinObj>(l, CMap[5], CMap[6]));
    l++;
    //
    //----------------------------------------------------------------------- 
@@ -4747,7 +4243,7 @@ void InitLPBranchModel8(bool restore)
    //
    //int len_out_branch_4 = len_out;
    // This branch will be paired with Test2.
-   //shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(pContext11, pContext , false);
+   //shared_ptr<DAGBranchObj> p_branch3 = make_shared<DAGBranchObj>(pContext8, pContext9, false);
    //LayerList.push_back(l, p_branch3);
    //l++;
    //
@@ -4763,9 +4259,22 @@ void InitLPBranchModel8(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext11));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[6]));
    }
    l++;
+   //---------------------------------------------------------------  
+      // Fully Connected Layer ---------------------------------------
+   // Type: ReLU
+   //len_in = len_out;
+   //len_out = 48;
+   //{
+   //   shared_ptr<Layer> pl = make_shared<Layer>(len_in, len_out, make_unique<actLeakyReLU>(0.01),
+   //      restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
+   //      dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
+   //      make_shared<OPTO>());
+   //   LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[6]));
+   //}
+   //l++;
    //---------------------------------------------------------------  
 
    // Fully Connected Layer ---------------------------------------
@@ -4777,23 +4286,24 @@ void InitLPBranchModel8(bool restore)
          restore ? dynamic_pointer_cast<iGetWeights>(make_shared<IOWeightsBinaryFile>(path, model_name + "." + to_string(l))) :
          dynamic_pointer_cast<iGetWeights>(make_shared<IWeightsToNormDist>(IWeightsToNormDist::Kaiming, 1)),
          make_shared<OPTO>());
-      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, pContext11));
+      LayerList.push_back(make_shared<DAGLayerObj>(l, pl, CMap[6]));
    }
    l++;
    //---------------------------------------------------------------      
    // Error Layer ---------------------------------------
    // Type: LossCrossEntropy
-   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropy>(len_out, 1), pContext11, gpError4));
+   EMap.emplace(3, 3);
+   LayerList.push_back(make_shared<DAGErrorLayer>(l, make_shared<LossCrossEntropyEx>(len_out, 1), CMap[6], EMap[3]));
    l++;
    // Branch Test Layer (Test 3) -----------------------------------------
    //
-   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch3, gpError3, restore ? 0 : 6 * 1100, 0.6, 0.98));
+   //LayerList.push_back(make_shared<DAGExitTest>(l, gpExit, p_branch2, gpError2));
    //l++;
    //
    //-----------------------------------------------------------------------
 
-
 }
+/*
 
 // NOTES:
 //   6/11 - Made the lower limit on the branch test successivly lower, meaning
@@ -6016,13 +5526,13 @@ void InitLPBranchModel9A(bool restore)
    //-----------------------------------------------------------------------
 
 }
-
+*/
 typedef void (*InitModelFunction)(bool);
 
 
 // NOTE: Model Selector
-InitModelFunction InitModel = InitLPBranchModel2T;
-InitModelFunction InitLocalizerModel = InitLPBranchModel1T;
+InitModelFunction InitModel = InitLPBranchModel1T;
+//InitModelFunction InitLocalizerModel = InitLPBranchModel1T;
 
 void SaveModelWeights()
 {
@@ -6242,8 +5752,10 @@ void TestModel(string dataroot)
    }
 
 
-
+#ifdef LOGPOLAR
    LogPolarSupportMatrix lpsm = PrecomputeLogPolarSupportMatrix1(28, 28, INPUT_ROWS, INPUT_COLS+LP_WASTE);
+#endif
+
    bool bsingle = false;
    cout << "Do you want to do single test? y/n ";
    cin >> c;
@@ -6252,7 +5764,7 @@ void TestModel(string dataroot)
       bsingle = true;
    }
 
-   SpacialTransformer st(SpacialTransformer::Size(INPUT_ROWS, INPUT_COLS), SpacialTransformer::Size(INPUT_ROWS, INPUT_COLS));
+   SpacialTransformer st(Size(INPUT_ROWS, INPUT_COLS), Size(INPUT_ROWS, INPUT_COLS));
    ColVector T(6);
 
    ColVector X;
@@ -6269,8 +5781,6 @@ void TestModel(string dataroot)
       TrasformMNISTtoMatrix(temp, X);
       ScaleToOne(temp.data(), (int)(temp.rows() * temp.cols()));
 #ifdef LOGPOLAR
-      pContextStart->Reset();
-      pContextStart->m[0].resize(INPUT_ROWS, INPUT_COLS);
       Matrix mlp(INPUT_ROWS, INPUT_COLS + LP_WASTE);
       if (bsingle) {
          double ang = 45.0 * M_PI / 180.0;
@@ -6279,7 +5789,7 @@ void TestModel(string dataroot)
          st.Eval(temp, temp, T);
       }
       ConvertToLogPolar(temp, mlp, lpsm);
-      pContextStart->m[0] = mlp.block(0, LP_WASTE, INPUT_ROWS, INPUT_COLS);
+      CMap[1].m[0] = mlp.block(0, LP_WASTE, INPUT_ROWS, INPUT_COLS);
 #else
       if (bsingle) {
          double ang = 30.0 * M_PI / 180.0;
@@ -6289,12 +5799,12 @@ void TestModel(string dataroot)
          T(3) = cos(ang);
          T(4) = 0.0;
          T(5) = 0.0;
-         pContextStart->Reset();
-         pContextStart->m[0].resize(INPUT_ROWS, INPUT_COLS);
-         st.Eval(temp, pContextStart->m[0], T);
+         CMap[1].Reset();
+         CMap[1].m[0].resize(INPUT_ROWS, INPUT_COLS);
+         st.Eval(temp, CMap[1].m[0], T);
       }
       else {
-         pContextStart->m[0] = temp;
+         CMap[1].m[0] = temp;
       }
 #endif
 
@@ -6308,11 +5818,19 @@ void TestModel(string dataroot)
       gpExit->stop = false;
       //*******************************************************
 
-      if (gpError1->correct || gpError2->correct || gpError3->correct || gpError4->correct || gpError5->correct) {
+      bool ecorrect = false;
+      for (pair<const int, ErrorContext>& ep : EMap) {
+         if (ep.second.correct) {
+            ecorrect = true;
+            break;
+         }
+      }
+
+      if (ecorrect) {
          correct++;
          
          if (bsingle) {
-            if (gpError1->correct && gpError1->class_max >= 0.9) {
+            if (EMap[1].correct && EMap[1].class_max >= 0.9) {
                int nl = GetLabel(ErrorContext::label);
                cout << "number " << nl << " correct. Do you want to save it?  Enter Y - yes | N - no | E - exit.";
                char c;
@@ -6320,7 +5838,7 @@ void TestModel(string dataroot)
                cout << endl;
                if (c == 'Y' || c == 'y') {
                   double astp = M_PI / 16.0;
-                  double ang = -pContext3->v[0] * astp;
+                  double ang = -CMap[3].v[0] * astp;
                   T(0) = cos(ang); T(1) = -sin(ang); T(2) = sin(ang); T(3) = cos(ang);
                   T(4) = 0.0; T(5) = 0.0;
                   MakeMatrixImage(path + "\\org." + to_string(count) + ".bmp", temp);
@@ -6374,9 +5892,9 @@ void MakeListOfCorrect(string dataroot)
 #ifdef LOGPOLAR
       Matrix mlp(INPUT_ROWS, INPUT_COLS + LP_WASTE);
       ConvertToLogPolar(temp, mlp, lpsm);
-      pContextStart->m[0] = mlp.block(0, LP_WASTE - 1, INPUT_ROWS, INPUT_COLS);
+      CMap[1].m[0] = mlp.block(0, LP_WASTE - 1, INPUT_ROWS, INPUT_COLS);
 #else
-      pContext1->m[0] = temp;
+      CMap[1].m[0] = temp;
 #endif
 
       //*******************************************************
@@ -6389,7 +5907,7 @@ void MakeListOfCorrect(string dataroot)
       gpExit->stop = false;
       //*******************************************************
 
-      if (gpError1->correct && gpError1->class_max >= 0.95) {
+      if (EMap[1].correct && EMap[1].class_max >= 0.95) {
       //if (gpError1->correct || gpError2->correct || gpError3->correct || gpError4->correct || gpError5->correct) {
          indexes(index) = count;
          if (index == (nsave - 1)) {
@@ -6505,11 +6023,11 @@ cout << dataroot << endl;
             ScaleToOne(temp.data(), (int)(temp.rows() * temp.cols()));
 
             #ifdef LOGPOLAR
-               pContext1->Reset();
-               pContext1->m[0].resize(INPUT_ROWS, INPUT_COLS);
-               ConvertToLogPolar(temp, pContext1->m[0], lpsm);
+               CMap[1].Reset();
+               CMap[1].m[0].resize(INPUT_ROWS, INPUT_COLS);
+               ConvertToLogPolar(temp, CMap[1].m[0], lpsm);
             #else
-               pContext1->m[0] = temp;
+               CMap[1].m[0] = temp;
             #endif
             // REVIEW: There is something wrong with this Matrix manipulator!
             //for (MatrixManipulator mm(temp, INPUT_ROWS, INPUT_COLS, true); !mm.isDone(); mm.next())
@@ -6530,7 +6048,7 @@ cout << dataroot << endl;
 
 
                //double le = loss->Eval(pContext2->v, dl[n].y);
-               double le = gpError2->error;
+               double le = EMap[2].error;
                //double lb = loss_branch->Eval(pContext4->v, ay);
                if (isnan(le)) {
                   for (auto lli : LayerList) { lli->ApplyStash(); }
@@ -6552,23 +6070,21 @@ cout << dataroot << endl;
                double d = 1.0 - a;
                e = a * le + d * e;
 
-               if (gpError1->correct) {
-                  correct1++;
-               }
-               else if (gpError2->correct) {
-                  correct2++;
-               }
-               else if (gpError3->correct) {
-                  correct3++;
-               }
-               else if (gpError4->correct) {
-                  correct4++;
+               for (pair<const int, ErrorContext>& ep : EMap) {
+                  if (ep.second.correct) {
+                     switch (ep.first) {
+                     case 1: correct1++; break;
+                     case 2: correct2++; break;
+                     case 3: correct3++; break;
+                     case 4: correct4++; break;
+                     }
+                  }
                }
 
                //*******************************************************
                //            Backward Pass
                //
-               // REVIEW: To stop training on an early branch (like branch 1) the 
+               // NOTE: To stop training on an early branch (like branch 1) the 
                // "stop" mechanism can be used.  The DAGError object could evaulate
                // conditions and set the "stop" condition just like it does during the
                // forward pass.  In this way we can cleanly stop training on early
@@ -6681,6 +6197,8 @@ void Train2(int nloop, string dataroot, double eta, int load )
    ErrorOutput err_out5(path, model_name + "_5");
 
    StatRunningAverage pose_error(path, model_name, "terr", 1000);
+   StatRunningAverage center_estimate_r(path, model_name, "center_r", 1000);
+   StatRunningAverage center_estimate_c(path, model_name, "center_c", 1000);
 
    const int reader_batch = 1000;  // Should divide into 60K
    const int batchs_per_epoch = 60;
@@ -6722,7 +6240,10 @@ void Train2(int nloop, string dataroot, double eta, int load )
    //std::uniform_real_distribution<double> rotate(-M_PI_4, M_PI_4);
    std::uniform_real_distribution<double> rotate(-M_ANG, M_ANG);
 
-   SpacialTransformer st(SpacialTransformer::Size(28, 28), SpacialTransformer::Size(28, 28));
+   //SpacialTransformer st(Size(28, 28), Size(28, 28));
+   SampleMatrix sm;
+   samplerBiLinear smp(Size(28, 28), Size(28, 28));
+   gridAffine grd(Size(28, 28), Size(28, 28));
    ColVector T(6);
 
 #ifdef LOGPOLAR
@@ -6732,11 +6253,17 @@ void Train2(int nloop, string dataroot, double eta, int load )
    Matrix mlp(INPUT_ROWS, INPUT_COLS + LP_WASTE);
    //cout << "Using LP Support Matrix builder from the Polar Transformaer paper with Alpha = 0.5." << endl;
 
-   auto logxform = [&temp, &mlp, &st, &lpsm](Matrix& s, Matrix& t, ColVector& T) {
-      st.Eval(s, temp, T);
+   //auto logxform = [&temp, &mlp, &st, &lpsm](Matrix& s, Matrix& t, ColVector& T) {
+   auto logxform = [&temp, &mlp, &sm, &smp, &grd, &lpsm](Matrix& s, Matrix& t, ColVector& T) {
+         //st.Eval(s, temp, T);
+      grd.Eval(sm, T);
+      smp.Eval(s, temp, sm);
       ConvertToLogPolar(temp, mlp, lpsm);
       t = mlp.block(0, LP_WASTE, INPUT_ROWS, INPUT_COLS);
    };
+#else
+   CMap[1].Reset();
+   CMap[1].m[0].resize(28, 28);
 #endif
 
    int n = 0;
@@ -6765,7 +6292,7 @@ void Train2(int nloop, string dataroot, double eta, int load )
          //            Forward Pass
 
          double ang = 0.0;
-         switch (1 /*g_augment_type*/ /*typ(rng)*/) {
+         switch (/*g_augment_type*/ typ(rng)) {
          case 1: // Rotate
             ang = rotate(rng);
             T(0) = cos(ang);
@@ -6774,11 +6301,6 @@ void Train2(int nloop, string dataroot, double eta, int load )
             T(3) = cos(ang);
             T(4) = 0.0;
             T(5) = 0.0;
-#ifdef LOGPOLAR
-            logxform(samples[n].m, pContextStart->m[0], T);
-#else
-            st.Eval(samples[n].m, pContextStart->m[0], T);
-#endif
             break;
          case 2: // Shift up / down
             T(0) = 1.0;
@@ -6787,11 +6309,6 @@ void Train2(int nloop, string dataroot, double eta, int load )
             T(3) = 1.0;
             T(4) = shift(rng);
             T(5) = 0.0;
-#ifdef LOGPOLAR
-            logxform(samples[n].m, pContextStart->m[0], T);
-#else
-            st.Eval(samples[n].m, pContextStart->m[0], T);
-#endif
             break;
          case 3: // Shift left / right
             T(0) = 1.0;
@@ -6800,25 +6317,26 @@ void Train2(int nloop, string dataroot, double eta, int load )
             T(3) = 1.0;
             T(4) = 0.0;
             T(5) = shift(rng);
-#ifdef LOGPOLAR
-            logxform(samples[n].m, pContextStart->m[0], T);
-#else
-            st.Eval(samples[n].m, pContextStart->m[0], T);
-#endif
             break;
          default:
-#ifdef LOGPOLAR
             T(0) = 1.0;
             T(1) = 0.0;
             T(2) = 0.0;
             T(3) = 1.0;
             T(4) = 0.0;
             T(5) = 0.0;
-            logxform(samples[n].m, pContextStart->m[0], T);
-#else
-            pContextStart->m[0] = samples[n].m;
-#endif            
          };
+
+#ifdef LOGPOLAR
+         logxform(samples[n].m, CMap[1].m[0], T);
+#else
+         {
+            vector_of_matrix vom;
+            vom.push_back(samples[n].m);
+            grd.Eval(sm, T);
+            smp.Eval(vom, CMap[1].m, sm);
+         }
+#endif
 
          ErrorContext::label = samples[n].y;
          size_t fwd_count = 0;
@@ -6834,20 +6352,17 @@ void Train2(int nloop, string dataroot, double eta, int load )
          //       the probability is less than the threshold set in the DAGExit the
          //       image will be forwarded to the next branch.
 
-         if (gpError1->correct) {
-            correct1++;
-         }
-         else if (gpError2->correct) {
-            correct2++;
-         }
-         else if (gpError3->correct) {
-            correct3++;
-         }
-         else if (gpError4->correct) {
-            correct4++;
-         }
-         else if (gpError5->correct) {
-            correct5++;
+         for (pair<const int, ErrorContext>& ep : EMap) {
+            if (ep.second.correct) {
+               switch (ep.first) {
+                  case 0: correct1++; break;
+                  case 1: correct2++; break;
+                  case 2: correct3++; break;
+                  case 3: correct4++; break;
+                  case 4: correct5++; break;
+               }
+               break;
+            }
          }
 
          //*******************************************************
@@ -6870,10 +6385,14 @@ void Train2(int nloop, string dataroot, double eta, int load )
          //   gpError2->SetStatus(true, std::abs((ang / astp) - pContext3->v[0]));
          //}
 
-         pose_error.Push( std::abs((ang / astp) - pContext12->v[0]) );
+         // REVIEW: Using the average pose value. 
+         pose_error.Push( std::abs((ang / astp) - CMap[0].v[0]) );
+         // REVIEW: This currently only works for InitModel1T
+         center_estimate_r.Push( CMap[5].v[0] );
+         center_estimate_c.Push( CMap[5].v[1] );
 
          if (t >= 1000) {
-            double ac1 = gpError1->PctCorrect();
+            double ac1 = EMap[0].PctCorrect();
             double ac2 = 0.0;
             double ac3 = 0.0;
             double ac4 = 0.0;
@@ -6888,10 +6407,10 @@ void Train2(int nloop, string dataroot, double eta, int load )
 //#endif
 //            }
 //            else {
-               ac2 = gpError2->PctCorrect();
-               ac3 = gpError3->PctCorrect();
-               ac4 = gpError4->PctCorrect();
-               ac5 = gpError5->PctCorrect();
+               ac2 = EMap[1].PctCorrect();
+               ac3 = EMap[2].PctCorrect();
+               ac4 = EMap[3].PctCorrect();
+               ac5 = EMap[4].PctCorrect();
 //            }
 
 
@@ -6906,6 +6425,9 @@ void Train2(int nloop, string dataroot, double eta, int load )
             err_out5.Write(ac5);
 
             pose_error.write();
+
+            center_estimate_r.write();
+            center_estimate_c.write();
 
             cout << "ep,loop:" << left << setw(3) << loop << ", " << left << setw(5) << b << "\tearly stops: " << left << setw(4) << early_stop
                //<< "\terror:" << left << setw(9) << std::setprecision(4) << e
@@ -6925,11 +6447,10 @@ void Train2(int nloop, string dataroot, double eta, int load )
             correct4 = 0;
             correct5 = 0;
 
-            gpError1->Reset();
-            gpError2->Reset();
-            gpError3->Reset();
-            gpError4->Reset();
-            gpError5->Reset();
+            for (pair<const int, ErrorContext>& ep : EMap) {
+               ep.second.Reset();
+            }
+
             early_stop = 0;
 
             char c = getch_noblock();
@@ -7042,7 +6563,7 @@ void Train3(int nloop, string dataroot, double eta, int load)
 
          //*******************************************************
          //            Forward Pass
-         pContext1->m[0] = mlp;
+         CMap[1].m[0] = mlp;
          ErrorContext::label = mp.y;
          fwd_count = 0;
          do {
@@ -7052,13 +6573,13 @@ void Train3(int nloop, string dataroot, double eta, int load)
          gpExit->stop = false;
          //*******************************************************
 
-         if (gpError1->correct) {
+         if (EMap[1].correct) {
             samples1.emplace_back(mlp, mp.y);
          }
-         else if (gpError2->correct) {
+         else if (EMap[2].correct) {
             samples2.emplace_back(mlp, mp.y);
          }
-         else if (gpError3->correct) {
+         else if (EMap[3].correct) {
             samples2.emplace_back(mlp, mp.y);
             //samples3.emplace_back(mlp, mp.y);
          }
@@ -7114,7 +6635,7 @@ void Train3(int nloop, string dataroot, double eta, int load)
          if (mixer <= 5) {
             b_mixed = true;
             int n = uni1(rng);
-            pContext1->m[0] = samples1[n].m;
+            CMap[1].m[0] = samples1[n].m;
             ErrorContext::label = samples1[n].y;
          }
          else {
@@ -7125,7 +6646,7 @@ void Train3(int nloop, string dataroot, double eta, int load)
             // Total try counter.
             t++;
             // REIVEW: 2 or 3 or 4 !!!!!!
-            pContext1->m[0] = samples2[n].m;
+            CMap[1].m[0] = samples2[n].m;
             ErrorContext::label = samples2[n].y;
          }
          //*******************************************************
@@ -7145,24 +6666,22 @@ void Train3(int nloop, string dataroot, double eta, int load)
                fwd_count++; // The loop exits at last count + 1.  This is by design.
             } while ((!gpExit->stop) && (fwd_count < LayerList.size()));
 
-            double le = gpError2->error;
+            double le = EMap[2].error;
 
             double a = 1.0 / (double)(avg_n);
             avg_n++;
             double d = 1.0 - a;
             e = a * le + d * e;
 
-            if (gpError1->correct) {
-               correct1++;
-            }
-            else if (gpError2->correct) {
-               correct2++;
-            }
-            else if (gpError3->correct) {
-               correct3++;
-            }
-            else if (gpError4->correct) {
-               correct4++;
+            for (pair<const int, ErrorContext>& ep : EMap) {
+               if (ep.second.correct) {
+                  switch (ep.first) {
+                     case 1: correct1++; break;
+                     case 2: correct2++; break;
+                     case 3: correct3++; break;
+                     case 4: correct4++; break;
+                  }
+               }
             }
          }
          gpExit->stop = false;
@@ -7317,7 +6836,7 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
    //std::uniform_real_distribution<double> rotate(-M_PI_4, M_PI_4);
    std::uniform_real_distribution<double> rotate(-M_ANG, M_ANG);
 
-   SpacialTransformer st(SpacialTransformer::Size(28, 28), SpacialTransformer::Size(28, 28));
+   SpacialTransformer st(Size(28, 28), Size(28, 28));
    ColVector T(6);
 
 #ifdef LOGPOLAR
@@ -7348,8 +6867,8 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
    const double astp = 2.0 * M_PI / 32.0;
 #endif
 #ifdef TRAIN_NET
-   pContext3->v.resize(1);
-   pContext3->v[0] = 0.0;
+   CMap[3].v.resize(1);
+   CMap[3].v[0] = 0.0;
 #endif
 
 
@@ -7407,9 +6926,9 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
 
 
 #ifdef LOGPOLAR
-            logxform(samples[n].m, pContextStart->m[0], T);
+            logxform(samples[n].m, CMap[1].m[0], T);
 #else
-            st.Eval(samples[n].m, pContextStart->m[0], T);
+            st.Eval(samples[n].m, CMap[1].m[0], T);
 #endif
             break;
          case 2: // Shift up / down
@@ -7420,9 +6939,9 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
             T(4) = shift(rng);
             T(5) = 0.0;
 #ifdef LOGPOLAR
-            logxform(samples[n].m, pContextStart->m[0], T);
+            logxform(samples[n].m, CMap[1].m[0], T);
 #else
-            st.Eval(samples[n].m, pContextStart->m[0], T);
+            st.Eval(samples[n].m, CMap[1].m[0], T);
 #endif
             break;
          case 3: // Shift left / right
@@ -7433,9 +6952,9 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
             T(4) = 0.0;
             T(5) = shift(rng);
 #ifdef LOGPOLAR
-            logxform(samples[n].m, pContextStart->m[0], T);
+            logxform(samples[n].m, CMap[1].m[0], T);
 #else
-            st.Eval(samples[n].m, pContextStart->m[0], T);
+            st.Eval(samples[n].m, CMap[1].m[0], T);
 #endif
             break;
          default:
@@ -7446,9 +6965,9 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
             T(3) = 1.0;
             T(4) = 0.0;
             T(5) = 0.0;
-            logxform(samples[n].m, pContextStart->m[0], T);
+            logxform(samples[n].m, CMap[1].m[0], T);
 #else
-            pContextStart->m[0] = samples[n].m;
+            CMap[1].m[0] = samples[n].m;
 #endif            
          };
 
@@ -7470,20 +6989,16 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
          //       the probability is less than the threshold set in the DAGExit the
          //       image will be forwarded to the next branch.
 
-         if (gpError1->correct) {
-            correct1++;
-         }
-         else if (gpError2->correct) {
-            correct2++;
-         }
-         else if (gpError3->correct) {
-            correct3++;
-         }
-         else if (gpError4->correct) {
-            correct4++;
-         }
-         else if (gpError5->correct) {
-            correct5++;
+         for (pair<const int, ErrorContext>& ep : EMap) {
+            if (ep.second.correct) {
+               switch (ep.first) {
+               case 1: correct1++; break;
+               case 2: correct2++; break;
+               case 3: correct3++; break;
+               case 4: correct4++; break;
+               case 5: correct5++; break;
+               }
+            }
          }
 
          //*******************************************************
@@ -7502,18 +7017,18 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
          //*******************************************************
 
          if (t >= 1000) {
-            double ac1 = gpError1->PctCorrect();
+            double ac1 = EMap[1].PctCorrect();
 #ifdef TRAIN_TRANSFORMER
-            double ac2 = gpError1->GetRunningAverage();
-            double ac3 = gpError1->GetRunningStdv();
+            double ac2 = EMap[1].GetRunningAverage();
+            double ac3 = EMap[1].GetRunningStdv();
 #else
             double ac2 = 0;
             double ac3 = 0;
 #endif
             //double ac2 = gpError2->PctCorrect();
             //double ac3 = gpError3->PctCorrect();
-            double ac4 = gpError4->PctCorrect();
-            double ac5 = gpError5->PctCorrect();
+            double ac4 = EMap[4].PctCorrect();
+            double ac5 = EMap[5].PctCorrect();
 
             int total_correct = correct1 + correct2 + correct3 + correct4 + correct5;
 
@@ -7541,11 +7056,9 @@ void TrainLocalizer(int nloop, string dataroot, double eta, int load)
             correct4 = 0;
             correct5 = 0;
 
-            gpError1->Reset();
-            gpError2->Reset();
-            gpError3->Reset();
-            gpError4->Reset();
-            gpError5->Reset();
+            for (pair<const int, ErrorContext>& ep : EMap) {
+               ep.second.Reset();
+            }
             early_stop = 0;
 
             char c = getch_noblock();
@@ -7620,15 +7133,22 @@ int main(int argc, char* argv[])
       std::cout << "Starting Branch MNIST.  Build date: " << __DATE__ << endl;
       string dataroot = "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data";
 
-      std::map<int, DAGContext> cm;
-      DAGContext& c1 = cm[1];
-      c1.v.resize(10);
-      DAGContext& c2 = cm[1];
+      //std::map<int, DAGContext> cm;
+      //DAGContext& c1 = cm[1];
+      //c1.v.resize(10);
+      //DAGContext& c2 = cm[1];
 
-      cout << c2.v.size();
+      //cout << c2.v.size();
       //InitModel = InitLPBranchModel1;
       //MakeListOfCorrect(dataroot);
-      return 0;
+
+
+      //std::map<unsigned int, ErrorContext> errorMap;
+      //errorMap.emplace(1, 1);
+
+      //ErrorContext& e1 = errorMap[1];
+
+      //return 0;
 
       if (argc > 1 && string(argv[1]) == "train") {
          if (argc < 3) {
@@ -7680,7 +7200,9 @@ int main(int argc, char* argv[])
          if (argc > 5) {
             int f = atoi(argv[5]);
             if (f > 0) {
-               InitModel = InitLPBranchModel1T;
+               cout << "Not implemented";
+               return 0;
+               //InitModel = InitLPBranchModel1T;
                g_transformer = true;
             }
             else {

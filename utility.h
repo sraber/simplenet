@@ -51,7 +51,7 @@ void GetMatrix(MatrixType& m, string filename) {
       for (int c = 0; c < header.cols; c++) {
          double v;
          file.read((char*)&v, header.step);
-         m(r, c) = v;
+         m(r, c) = static_cast<int>(v);
       }
    }
 

@@ -133,18 +133,12 @@ public:
 // The convolutional network requires an interface to abstract
 // the various network components.  Unlike a fully connected 
 // network, a convolutional network is not a homogenious list of 
-// objects.  There is convolution, pooling layers, and flattening
+// objects.  There are convolution, pooling layers, and flattening
 // layers, to name a few.  The iConvoLayer interface allows us
 // to place the various objects into a single list.
 class iConvoLayer {
 public:
-   struct Size {
-      int cols;
-      int rows;
-      Size() : cols(0), rows(0) {}
-      Size(int r, int c) : cols(c), rows(r) {}
-      inline void Resize(int r, int c) { rows = r; cols = c; }
-   };
+
    virtual ~iConvoLayer () = 0 {};
    virtual vector_of_matrix Eval(const vector_of_matrix& _x) = 0;
    virtual vector_of_matrix BackProp(vector_of_matrix& child_grad, bool want_backprop_grad = true) = 0;
@@ -152,7 +146,21 @@ public:
    virtual void Save(shared_ptr<iPutWeights> _pOut) = 0;
 };
 
-typedef iConvoLayer::Size clSize;
+// The convolutional layer as well as many other types of layers need a representation for
+// a matrix size.  This defination might be better named Size2D or Rect, but for now, due to
+// legacy, it is simply named Size.
+// REVIEW: All of these definations should be placed in a namespace.
+struct Size {
+   int cols;
+   int rows;
+   Size() : cols(0), rows(0) {}
+   Size(int r, int c) : cols(c), rows(r) {}
+   inline void Resize(int r, int c) { rows = r; cols = c; }
+   inline bool operator==(const Matrix& m) {
+      return (m.rows() == rows && m.cols() == cols);
+   }
+};
+typedef Size clSize;
 //-----------------------------------------------------------
 
 //---------- The Stash interface ----------------------------
@@ -912,7 +920,7 @@ public:
       W = stash_W;
       pOptomizer->Reinit();
    }
-
+   
    ColVector Eval(const ColVector& _x) {
       X.topRows(InputSize) = _x;   // Will throw an exception if _x.size != InputSize
       X(InputSize) = 1;            // This accounts for the bias weight.
@@ -1516,7 +1524,7 @@ public:
 
             // Recall that rv_delta_grad is a vector map onto m_delta_grad.  Using
             // this channel delta_grad compute the update gradients for the current 
-            // filter matrix iw.
+            // filter matrix iter_dW.
             LinearCorrelate(X[chn], m_chan_delta_grad, iter_dW);
 
             //cout << iter_dW << endl << endl;
@@ -2292,21 +2300,21 @@ public:
 
 class LossCrossEntropy : public iLossLayer{
 public:
-   int Size;
+   int Length;
    ColVector X;
    ColVector Y;
    RowVector G;
 
    LossCrossEntropy() 
    {
-      Size = 0;
+      Length = 0;
    }
 
    LossCrossEntropy(int input_size, int output_size) :
       X(input_size),
       Y(input_size),
       G(input_size),
-      Size(input_size)
+      Length(input_size)
    {
    }
 
@@ -2314,15 +2322,15 @@ public:
       X.resize(input_size);
       Y.resize(input_size),
       G.resize(input_size),
-      Size = input_size;
+      Length = input_size;
    }
 
    Number Eval(const ColVector& x, const ColVector& y) {
-      assert(Size > 0);
+      assert(Length > 0);
       X = x;
       Y = y;
       double loss = 0.0;
-      for (int i = 0; i < Size; i++) {
+      for (int i = 0; i < Length; i++) {
          // No reason to evaulate this expression if y[i]==0.0 .
          if (y[i] != 0.0) {
             //                        Prevent undefined results when taking the log of 0
@@ -2334,8 +2342,7 @@ public:
    }
 
    RowVector LossGradient(void) {
-      //RowVector g(Size);
-      for (int i = 0; i < Size; i++) {
+      for (int i = 0; i < Length; i++) {
          if (X[i] <= std::numeric_limits<double>::epsilon() ) {
             if (Y[i] <= std::numeric_limits<double>::epsilon() ) {
                G[i] = 0.0;
