@@ -223,8 +223,8 @@ public:
 
       //cout << dLdR << endl << endl << dLdC << endl;
 
-      int rows = dV.rows();
-      int cols = dV.cols();
+      int rows = (int)dV.rows();
+      int cols = (int)dV.cols();
 
       double dt0 = 0;
       double dt1 = 0;
@@ -372,10 +372,10 @@ private:
    {
       SampleMatrix& sm = SM;
 
-      int rows = out.rows();
-      int cols = out.cols();
-      int srows = m.rows();
-      int scols = m.cols();
+      int rows = (int)out.rows();
+      int cols = (int)out.cols();
+      int srows = (int)m.rows();
+      int scols = (int)m.cols();
 
       for (int r = 0; r < rows; r++) {
          for (int c = 0; c < cols; c++) {
@@ -405,10 +405,11 @@ private:
 
    void ComputeGridGradients( const Matrix& dLdV, Matrix& dLdR, Matrix& dLdC, SampleMatrix& sm )
    {
-      int rows = dLdV.rows();
-      int cols = dLdV.cols();
+      int rows = (int)dLdV.rows();
+      int cols = (int)dLdV.cols();
 
-      // REVIEW: Do some bounds checking.
+      runtime_assert( sm.size()==OutputSize.rows )
+      runtime_assert( sm.size()>=1 && sm[0].size()==OutputSize.cols )
 
       for (int r = 0; r < OutputSize.rows; r++) {
          for (int c = 0; c < OutputSize.cols; c++) {
@@ -471,6 +472,11 @@ class samplerBiLinear :
    Size OutputSize;
    // Input Matrix.
    vector_of_matrix U; 
+
+   shared_ptr<iCallBackSink> EvalCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
+   shared_ptr<iCallBackSink> GridBackpropCallBack;
+
 public:
    samplerBiLinear(const Size input_size, const Size output_size, double padding_value = 0.0) :
       InputSize(input_size),
@@ -493,6 +499,15 @@ public:
          //       leaving the Input/Output variable safe to resize.
          iv->resize(OutputSize.rows, OutputSize.cols);
          BiLinearSampler(*iu, *iv, sm);
+      }
+
+      if (EvalCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "U", CBObj(U) });
+         props.insert({ "V", CBObj(V) });
+         EvalCallBack->Properties(props);
       }
    }
 
@@ -543,6 +558,15 @@ public:
                }
             }
          }
+      }
+
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "DLDU", CBObj(dLdU) });
+         props.insert({ "DLDV", CBObj(dLdV) });
+         BackpropCallBack->Properties(props);
       }
 
       return dLdU;
@@ -597,7 +621,21 @@ public:
             //---------------------------------------------------------------------------------
          }
       }
+
+      if (GridBackpropCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "DLDR", CBObj(dLdR) });
+         props.insert({ "DLDC", CBObj(dLdC) });
+         props.insert({ "DLDV", CBObj(dLdV) });
+         GridBackpropCallBack->Properties(props);
+      }
    }
+
+   void SetEvalCallBack(shared_ptr<iCallBackSink> icb) { EvalCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) { BackpropCallBack = icb; }
+   void SetGridBackpropCallBack(shared_ptr<iCallBackSink> icb) { GridBackpropCallBack = icb; }
 
 #undef ValueInRange
 
@@ -608,10 +646,10 @@ private:
 
    void BiLinearSampler(const Matrix& m, Matrix& out, const SampleMatrix& sm)
    {
-      int rows = out.rows();
-      int cols = out.cols();
-      int srows = m.rows();
-      int scols = m.cols();
+      int rows = (int)out.rows();
+      int cols = (int)out.cols();
+      int srows = (int)m.rows();
+      int scols = (int)m.cols();
       runtime_assert( sm.size() > 0 && sm.size()==rows && sm[0].size()==cols )
 
       for (int r = 0; r < rows; r++) {
@@ -660,6 +698,9 @@ class gridAffine :
    Size OutputSize;
    ColVector GridC;
    ColVector GridR; 
+
+   shared_ptr<iCallBackSink> EvalCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack;
 public:
    gridAffine(const Size input_size, const Size output_size) :
       InputSize(input_size),
@@ -673,6 +714,14 @@ public:
    {
       sm.resize(OutputSize.rows, std::vector<std::tuple<int, int, int, int, double, double>>(OutputSize.cols));
       GenerateAffineGrid(sm, T);
+
+      if (EvalCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "T", CBObj(T) });
+         EvalCallBack->Properties(props);
+      }
    }
 
    RowVector Backprop(const Matrix& dLdR, const Matrix& dLdC, const SampleMatrix& sm)
@@ -710,8 +759,22 @@ public:
       dT(4) = dt4;
       dT(5) = dt5;
 
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "DLDR", CBObj(dLdR) });
+         props.insert({ "DLDC", CBObj(dLdC) });
+         props.insert({ "DT", CBObj(dT) });
+         BackpropCallBack->Properties(props);
+      }
+
       return dT;
    }
+
+   void SetEvalCallBack(shared_ptr<iCallBackSink> icb) { EvalCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) { BackpropCallBack = icb; }
+
 private:
 
    // The Sample Matrix generator for Affine transform.
@@ -778,6 +841,9 @@ class gridLogPolar :
    double MaxRad;
    int Waste;
    int Columns;
+
+   shared_ptr<iCallBackSink> EvalCallBack;
+   shared_ptr<iCallBackSink> BackpropCallBack; 
 public:
    gridLogPolar(const Size input_size, const Size output_size, int waste_col = 0, double min_rad = 0.5, double max_rad = 0.0 ) :
       InputSize(input_size),
@@ -799,6 +865,14 @@ public:
    {
       sm.resize(OutputSize.rows, std::vector<std::tuple<int, int, int, int, double, double>>(OutputSize.cols));
       GenerateGrid(sm, T);
+
+      if (EvalCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "T", CBObj(T) });
+         EvalCallBack->Properties(props);
+      }
    }
 
    RowVector Backprop(const Matrix& dLdR, const Matrix& dLdC, const SampleMatrix& sm)
@@ -818,8 +892,21 @@ public:
       dT(0) = dt0;
       dT(1) = dt1;
 
+      if (BackpropCallBack != nullptr) {
+         map<string, CBObj> props;
+         int id = 1;
+         props.insert({ "ID", CBObj(id) });
+         props.insert({ "DLDR", CBObj(dLdR) });
+         props.insert({ "DLDC", CBObj(dLdC) });
+         props.insert({ "DT", CBObj(dT) });
+         BackpropCallBack->Properties(props);
+      }
+
       return dT;
    }
+
+   void SetEvalCallBack(shared_ptr<iCallBackSink> icb) { EvalCallBack = icb; }
+   void SetBackpropCallBack(shared_ptr<iCallBackSink> icb) { BackpropCallBack = icb; }
 private:
 
    // The Sample Matrix generator for Log-Polar transform.

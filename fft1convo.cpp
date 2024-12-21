@@ -114,10 +114,9 @@ void fft1convolve(const ColVector& m, const ColVector& h, ColVector& o, int con_
    if (rows < hrows) { rows = hrows; }
    if (rows < orows) { rows = orows; }
 
-   if (std::_Is_pow_2(rows)) {
-      if (force_row_pad) { rows <<= 1; }
-   }
-   else {
+   if (force_row_pad) { rows <<= 1; }
+
+   if (!std::_Is_pow_2(rows)) {
       rows = nearest_power_ceil(rows);
    }
 

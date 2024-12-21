@@ -236,6 +236,56 @@ void LinearConvolution3( Matrix& m, Matrix& h, Matrix& out )
    }
 }
 
+double MultiplyReverseCol(ColVector& m, int mr, ColVector& h, int hr, int size_r)
+{
+   double sum = 0.0;
+   for (int r = 0; r < size_r; r++) {
+      sum += m(mr - r) * h(hr + r);
+   }
+   return sum;
+}
+
+void LinearConvolve1D(ColVector& m, ColVector& h, ColVector& out)
+{
+   const int mrows = m.rows();
+   const int hrows = h.rows();
+   const int orows = out.rows();
+   int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
+   int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
+   int hr2p = hrows >> 1; // The complement of hr2
+   int or2 = orows >> 1; if (!(orows % 2)) { or2--; }
+
+   for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
+      int h1r;
+      int m2r;
+      int m1r;
+      int cr, cc;
+      cr = r + mr2 - or2;
+      m2r = cr + hr2;  // Use h2 to the positive side because it is the negitive side
+      m1r = cr - hr2p; // Similarly the negitive side physically is the positive
+      h1r = 0;
+
+      int shr = hrows;
+      if (m2r >= mrows) {
+         int d = m2r - mrows + 1;
+         m2r = mrows - 1;
+         h1r += d;
+         shr -= d;
+      }
+      if (m1r < 0) {
+         shr += m1r;
+         m1r = 0;
+      }
+
+      if (shr <= 0 ) {
+         out(r) = 0.0;
+      }
+      else {
+         out(r) = MultiplyReverseCol(m, m2r, h, h1r, shr);
+      }
+   }
+}
+
 void LinearCorrelate0( Matrix& g, Matrix& h, Matrix& out )
 {
    for (int r = 0; r < out.rows(); r++) {     // 0 to rows --> -On to On
@@ -370,6 +420,7 @@ void LinearCorrelate3( Matrix& m, Matrix& h, Matrix& out )
       }
    }
 }
+
 void LinearCorrelate1D(ColVector& m, ColVector& h, ColVector& out)
 {
    const int mrows = m.rows();
@@ -1314,7 +1365,7 @@ void rlft2(Doub *data, ColVector& speq,
 }
 
 
-void TestFilterFunctionDriver(int sm, int sh, int so, fn_filter fn, fn_mat_shape shp1, fn_mat_shape shp2)
+void TestFilterFunctionDriver(int sm, int sh, int so, fn_filter fn, fn_filter ln, fn_mat_shape shp1, fn_mat_shape shp2)
 {
    char buf[255];
    std::snprintf(buf, 255, "fc_%d_%d_%d", sm, sh, so);
@@ -1322,11 +1373,11 @@ void TestFilterFunctionDriver(int sm, int sh, int so, fn_filter fn, fn_mat_shape
    TestFilterFunction(sm, sh, so, buf, fn, shp1, shp2 );
    cout << endl << "Linear Filter" << endl;
    std::snprintf(buf, 255, "lc_%d_%d_%d", sm, sh, so);
-   TestFilterFunction(sm, sh, so, buf, LinearCorrelate3, shp1, shp2);
+   TestFilterFunction(sm, sh, so, buf, ln, shp1, shp2);
    cout << endl;
 }
 
-void TestFilter1Driver(int sm, int sh, int so, fn_filter1D fn, fn_mat_shape1D shp1, fn_mat_shape1D shp2)
+void TestFilter1Driver(int sm, int sh, int so, fn_filter1D fn, fn_filter1D ln, fn_mat_shape1D shp1, fn_mat_shape1D shp2)
 {
    char buf[255];
    std::snprintf(buf, 255, "fc1D_%d_%d_%d", sm, sh, so);
@@ -1334,7 +1385,7 @@ void TestFilter1Driver(int sm, int sh, int so, fn_filter1D fn, fn_mat_shape1D sh
    TestFilterFunction1D(sm, sh, so, buf, fn, shp1, shp2);
    cout << endl << "Linear Filter" << endl;
    std::snprintf(buf, 255, "lc1D_%d_%d_%d", sm, sh, so);
-   TestFilterFunction1D(sm, sh, so, buf, LinearCorrelate1D, shp1, shp2);
+   TestFilterFunction1D(sm, sh, so, buf, ln, shp1, shp2);
    cout << endl;
 }
 
@@ -2024,15 +2075,291 @@ void TestCyclicTransform()
    fcsv.Write(out, 5);
 }
 
+void TestFatner()
+{
+   MNISTReader::MNIST_list dl;
+   int itodl[10];
+
+   MNISTReader reader("C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-images-idx3-ubyte",
+      "C:\\projects\\neuralnet\\cpp_nn_in_a_weekend-master\\data\\train\\train-labels-idx1-ubyte");
+
+   dl = reader.read_batch(20);
+   itodl[0] = 1;
+   itodl[1] = 14;
+   itodl[2] = 5;
+   itodl[3] = 12;
+   itodl[4] = 2;
+   itodl[5] = 0;
+   itodl[6] = 13;
+   itodl[7] = 15;
+   itodl[8] = 17;
+   itodl[9] = 4;
+
+   Matrix g(28, 28);
+   TrasformMNISTtoMatrix(g, dl[itodl[4]].x);
+   ScaleToOne(g.data(), g.rows() * g.cols());
+
+   MakeMatrixImage(path + "\\origional.bmp", g);
+
+   Matrix h(28, 28);
+   double r_c = 13.5;
+   double c_c = 13.5;
+   double sig = 2.0;
+   double norm = 1.0 / (2.0 * M_PI * sig);
+
+   for (int r = 0; r < 28; r++) {
+      for (int c = 0; c < 28; c++) {
+         double rr = r - r_c;
+         double cc = c - c_c;
+         double e = (rr * rr + cc * cc) / (2.0 * sig);
+         h(r, c) = norm * std::exp(-e);
+      }
+   }
+
+   Matrix o(28, 28);
+
+   //LinearConvolution3(g, h, o);
+   fft2convolve(g, h, o, 1, true, true);
+
+   //ScaleToOne(o.data(), o.rows() * o.cols());
+   double t = 0.15;
+   for (int r = 0; r < 28; r++) {
+      for (int c = 0; c < 28; c++) {
+         if (o(r, c) >= t) {
+            o(r, c) = 1.0;
+         }
+         else {
+            o(r, c) = 0.0;
+         }
+      }
+   }
+
+   string name = "fat_four";
+
+   MakeMatrixImage(path + "\\" + name + ".bmp", o);
+
+   ofstream owf(path + "\\" + name + ".csv", ios::trunc);
+
+   // octave file format
+   const static Eigen::IOFormat OctaveFmt(6, 0, ", ", ";\n", "", "", "", "");
+   owf << o.format(OctaveFmt);
+   owf.close();
+}
+
+void ComputeCentroid(double& x, double& y, Matrix& m)
+{
+   int rows = m.rows();
+   int cols = m.cols();
+   double total_x = 0;
+   double total_y = 0;
+   double weight = 0;
+
+   // Iterate through the matrix to calculate the centroid
+   for (int i = 0; i < rows; i++) {
+      for (int j = 0; j < cols; j++) {
+         double value = m(i, j);
+         if (value > 0.0) {
+            total_x += j * value;
+            total_y += i * value;
+            weight += value;
+         }
+      }
+   }
+
+   // Calculate the centroid
+   if (weight > 0.0) {
+      x = total_x / weight;
+      y = total_y / weight;
+   }
+}
+
+void TestGauss2DFitter()
+{
+   // ToDo:
+   // Generate a matrix to fit.
+   // Write the Gauss function and deravitive.
+   // Itterate to find the fit.
+   // Output the result.
+   // Output the input matrix and the fit matrix to CSV.
+
+   struct grad3 {
+      double dgdrc;
+      double dgdcc;
+      double dgdlam;
+      grad3(double drc, double dcc, double dlam) : dgdrc(drc), dgdcc(dcc), dgdlam(dlam) {}
+      grad3() : dgdrc(0.0), dgdcc(0.0), dgdlam(0.0) {}
+   };
+
+   auto g = [](double rc,double cc,double lam,double r, double c) {
+      double dr = r - rc;
+      double dc = c - cc;
+      double sig = 2.0 * lam;
+      return (exp(-(dr * dr + dc * dc) / sig));
+   };
+
+   auto grad_g = [g](double rc, double cc, double lam, double r, double c) {
+      double dr = r - rc;
+      double dc = c - cc;
+      double dgdrc = g(rc, cc, lam, r, c) * (r - rc) / lam;
+      double dgdcc = g(rc, cc, lam, r, c) * (c - cc) / lam;
+      double dgdl = 0.5 * g(rc, cc, lam, r, c) * (dr * dr + dc * dc) / (lam * lam);
+
+      return grad3(dgdrc,dgdcc,dgdl);
+   };
+
+   /*
+   const double RC = 16.0;
+   const double CC = 14.0;
+   const double LAM = 10.0;
+
+   ColVector gauss(32);
+   ColVector dgdr(32);
+   ColVector dgdc(32);
+   ColVector dgdl(32);
+
+   ColVector g1(32);
+   ColVector g2(32);
+   double h = 0.001;
+
+   for (int r = 0; r < 32; r++) {
+      g1(r) = g(RC, CC, LAM - h, (double)r, CC);
+      g2(r) = g(RC, CC, LAM + h, (double)r, CC);
+   }
+
+   g2 -= g1;
+   g2 /= (2.0 * h);
+
+
+
+   for (int r = 0; r < 32; r++) {
+      gauss(r) = g(RC, CC, LAM, (double)r, CC);
+      grad3 g3 = grad_g(RC, CC, LAM, (double)r, CC);
+      dgdr(r) = g3.dgdrc;
+      dgdc(r) = g3.dgdcc;
+      dgdl(r) = g3.dgdlam;
+   }
+
+   ofstream owf(path + "\\gauss.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << gauss;
+   owf.close();
+
+   owf.open(path + "\\gauss_dr.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << dgdr;
+   owf.close();
+
+   owf.open(path + "\\gauss_test_dl.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << g2;
+   owf.close();
+
+   owf.open(path + "\\gauss_dc.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << dgdc;
+   owf.close();
+
+   owf.open(path + "\\gauss_dl.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << dgdl;
+   owf.close();
+
+   return;
+   */
+
+   const int rows = 32;
+   const int cols = 28;
+   Matrix f(rows, cols);
+   f.setRandom();
+   f *= 0.1;
+
+   for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+         f(r, c) += 0.25 * g(9.0, 10.0, 4.0, r, c);
+         f(r, c) += 0.25 * g(10.0, 18.0, 6.0, r, c);
+         f(r, c) += 0.25 * g(18.0, 12.0, 7.0, r, c);
+         f(r, c) += 0.25 * g(19.0, 11.0, 3.0, r, c);
+      }
+   }
+
+   double step = 0.05;
+   double mc = 16.0;
+   double nc = 14.0;
+   double lam = 6.0;
+
+   ComputeCentroid(mc, nc, f);
+
+   for (int n = 0; n < 10000; n++) {
+      // Compute E and the grad of E
+      grad3 grad_E;
+      double err = 0;
+
+      for (int r = 0; r < rows; r++) {
+         for (int c = 0; c < cols; c++) {
+            double dr = r - mc;
+            double dc = c - nc;
+            double gg = g(mc, nc, lam, r, c);
+            double zz = f(r,c) - gg;
+            grad3 g3 = grad_g(mc, nc, lam, r, c);
+
+
+            // Accumulate the error term
+            err += (zz * zz);
+
+            // Compute the grad of E
+            grad_E.dgdrc += (-2.0 * zz * g3.dgdrc);
+            grad_E.dgdcc += (-2.0 * zz * g3.dgdcc);
+            grad_E.dgdlam += (-2.0 * zz * g3.dgdlam);
+         }
+      }
+      if (!(n % 100)) {
+         step *= 0.99;
+         cout << "step: " << step << " err: " << err << " mc: " << mc << " nc: " << nc << " lam: " << lam << endl;
+      }
+
+      mc = mc - step * grad_E.dgdrc;
+      nc = nc - step * grad_E.dgdcc;
+      lam = lam - step * grad_E.dgdlam;
+      if (lam < 1.0) {
+         lam = 1.0;
+      }
+   }
+
+   cout << "mc: " << mc << " nc: " << nc << " lam: " << lam << endl;
+
+   Matrix g1(rows,cols);
+
+   for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+         g1(r,c) = g(mc, nc, lam, (double)r, c);
+      }
+   }
+
+   ofstream owf(path + "\\gauss.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << g1;
+   owf.close();
+
+   owf.open(path + "\\tofit.csv", ios::trunc);
+   assert(owf.is_open());
+   owf << f;
+   owf.close();
+}
+
 int main()
 
 {
     std::cout << "Algorithm Tester!\n";
+
+    TestGauss2DFitter();
+
+    //TestFatner();
+
     //test_transformer();
-    TestTransformerGradComp();
+    //TestTransformerGradComp();
     //TestCyclicTransformerGradComp();
     //TestCyclicTransform();
-    return 0;
+    //return 0;
     //ColVector test;
     //test = ColVector::LinSpaced(11, -1.0, 1.0) * ((11 - 1) / 2.0);
 
@@ -2075,26 +2402,69 @@ int main()
     cout << "max row: " << mr << " col:" << mc << endl;
     */
 
-    FastMath();
+   // FastMath();
 
 /*
-    auto fft2filter = [](Matrix& m, Matrix& h, Matrix& o) { fft2convolve(m, h, o, -1, true, true); };
+    auto fft1filter = [](Matrix& m, Matrix& h, Matrix& o) { fft2convolve(m, h, o, -1, true, true); };
+    auto fft2filter = [](Matrix& m, Matrix& h, Matrix& o) { fft2convolve(m, h, o, 1, true, true); };
 
 
     auto shp = [](Matrix& m) { MakeCenterCircle(m, 5); };
     auto shp_pt = [](Matrix& m) { m.setZero(); m(15, 15) = 1.0; };
     auto shp_edg = [](Matrix& m) { 
        m.setZero(); 
-       m.col(4).setConstant(1.0); 
-       m(0, 4) = 0;
-       m(1, 4) = 0;
-       m(30,4) = 0;
-       m(31,4) = 0;
+       int col = 0;
+       m.col(col).setConstant(1.0); 
+       m(0, col) = 0;
+       m(1, col) = 0;
+       m(30,col) = 0;
+       m(31,col) = 0;
     };
-    fftn::filter_correlation = true;
-    TestFilterFunctionDriver(32, 32, 32, fft2filter, shp_edg, shp_pt);
+    auto shp_sploch = [](Matrix& m) {
+       m.setZero();
+       int col = 31;
+       m(3, col) = 1;
+       m(4, col) = 1;
+       m(15, col) = 1;
+       m(16, col) = 1;
 
+       col = 30;
+       m(3, col) = 1;
+       m(4, col) = 1;
+       m(15, col) = 1;
+       m(16, col) = 1;
+    };
+
+    auto shp_gauss = [](Matrix& m) {
+       double sig = 4.0;
+       int ksr = m.rows();
+       int ksc = m.cols();
+       double r_c = ((double)ksr) / 2.0;
+       double c_c = ((double)ksr) / 2.0;
+
+       double norm = 1.0 / (2.0 * M_PI * sig);
+
+       for (int r = 0; r < ksr; r++) {
+          for (int c = 0; c < ksc; c++) {
+             double rr = r - r_c;
+             double cc = c - c_c;
+             double e = (rr * rr + cc * cc) / (2.0 * sig);
+             m(r, c) = norm * std::exp(-e);
+          }
+       }
+    };
+
+
+    //TestFilterFunctionDriver(32, 32, 32, fft1filter, LinearCorrelate3, shp_edg, shp_pt);
+
+    TestFilterFunctionDriver(32, 32, 32, fft2filter, LinearConvolution3, shp_sploch, shp_gauss);
+
+    /*
     auto fft1filter = [](ColVector& m, ColVector& h, ColVector& o) { fft1convolve(m, h, o, -1, true); };
+    auto fft2filter = [](ColVector& m, ColVector& h, ColVector& o) { fft1convolve(m, h, o, 1, true); };
+
+    auto l1filter = [](ColVector& m, ColVector& h, ColVector& o) { LinearCorrelate1D(m, h, o); };
+    auto l2filter = [](ColVector& m, ColVector& h, ColVector& o) { LinearConvolve1D(m, h, o); };
 
 
     auto MakeCenterPatch = [](ColVector& m )
@@ -2110,14 +2480,43 @@ int main()
        }
     };
     auto shp_pt1 = [](ColVector& m) { m.setZero(); m(15) = 1.0; };
-    auto shp_edg1 = [](ColVector& m) { m.setZero(); m(0) = 1.0; };
-*/
-    //TestFilter1Driver(31, 10, 9, fft1filter, MakeCenterPatch, MakeCenterPatch);
+    auto shp_gauss = [](ColVector& m) {
+       double sig = 2.0;
+       double norm = 1.0 / (2.0 * M_PI * sig);
+       int ksr = m.rows();
+       double r_c = ((double)ksr) / 2.0;
 
+       for (int r = 0; r < ksr; r++) {
+          double rr = r - r_c;
+          double e = (rr * rr) / (2.0 * sig);
+          m(r) = norm * std::exp(-e);
+       }
+    };
+
+    auto shp_half_gauss = [](ColVector& m) {
+       double sig = 2.0;
+       double norm = 1.0 / (2.0 * M_PI * sig);
+       int ksr = m.rows();
+       double r_c = ((double)ksr) / 2.0;
+
+       m.setZero();
+       for (int r = r_c; r < ksr; r++) {
+          double rr = r - r_c;
+          double e = (rr * rr) / (2.0 * sig);
+          m(r) = norm * std::exp(-e);
+       }
+    };
+    auto shp_edg1 = [](ColVector& m) { m.setZero(); m(0) = 1.0; };
+    auto shp_edg2 = [](ColVector& m) { m.setZero(); m(31) = 1.0; };
+
+    TestFilter1Driver(32, 32, 32, fft1filter, l1filter, shp_pt1, shp_half_gauss);
+    */
     char c;
     cout << "hit a key and press Enter";
     cin >> c;
-
+    // Try this
+    //system("pause");
+    //
     //REVIEW:
     // The test image was tainting the comparisons.  Fixed the test image
     // and now the correlation and convolution algorithms produce same
@@ -2127,7 +2526,7 @@ int main()
     //TestFilterFunction(32,16,16,"con_old", LinearCorrelate3);
     //TestFilterFunction(32,16,16,"con_new", LinearConvolution3);
 
-    // Combining Signals in the Time or Frequency domain results in the same outcome/
+    // Combining Signals in the Time or Frequency domain results in the same outcome
     /*
     ColVector vec1(256);
     vec1.setZero();

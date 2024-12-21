@@ -85,7 +85,7 @@ void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign)
          double c = h(row, cc);
          double d = sign * h(row, cc + 1); // Conjugate
 
-         // Introduce a shift in the result of -sign (built into the value of w).
+         // Introduce a shift in the result of -sign (built into the value of e and f).
          //
          double o = fac * (a * c - d * b);
          double p = fac * (c * b + a * d);
@@ -143,6 +143,8 @@ void fft2ConCor(Matrix& m, Matrix& h, Matrix& out, int sign)
 
 // REVIEW: 1) Hate the name.
 //         2) force pad isn't enough.  Minimum pad is a better way to go.
+//
+// NOTE: Use force_X_pad to insure linear convolution or correlation.
 void fft2convolve( const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
                   bool force_row_pad, bool force_col_pad,
                   bool sum_into_output )
@@ -168,16 +170,14 @@ void fft2convolve( const Matrix& m, const Matrix& h, Matrix& o, int con_cor,
    if (cols < hcols) { cols = hcols; }
    if (cols < ocols) { cols = ocols; }
 
-   if (std::_Is_pow_2(rows)) {
-      if (force_row_pad) { rows <<= 1; }
-   }
-   else{ 
+   if (force_row_pad) { rows <<= 1; }
+   if (force_col_pad) { cols <<= 1; }
+
+   if (!std::_Is_pow_2(rows)) {
       rows = fftn::nearest_power_ceil(rows);
    }
-   if (std::_Is_pow_2(cols)) {
-      if (force_col_pad) { cols <<= 1; }
-   }
-   else{
+
+   if (!std::_Is_pow_2(cols)) {
       cols = fftn::nearest_power_ceil(cols);
    }
 

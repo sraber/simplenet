@@ -155,6 +155,10 @@ struct Size {
    int rows;
    Size() : cols(0), rows(0) {}
    Size(int r, int c) : cols(c), rows(r) {}
+   Size(const Size& s) {
+      rows = s.rows; 
+      cols = s.cols;
+   }
    inline void Resize(int r, int c) { rows = r; cols = c; }
    inline bool operator==(const Matrix& m) {
       return (m.rows() == rows && m.cols() == cols);
@@ -236,14 +240,24 @@ public:
       for (Matrix& m : dW) { m.resize(rows, cols); }
    }
    void Backprop(Matrix& idW, int chn) {
-      const double a = 1.0 / Count;
-      const double b = 1.0 - a;
-      dW[chn] = a * idW + b * dW[chn];
+      if (Count > 1) {
+         const double a = 1.0 / Count;
+         const double b = 1.0 - a;
+         dW[chn] = a * idW + b * dW[chn];
+      }
+      else {
+         dW[chn] = idW;
+      }
    }
    void BackpropBias(double idB, int chn) {
-      const double a = 1.0 / Count;
-      const double b = 1.0 - a;
-      dB[chn] = a * idB + b * dB[chn];
+      if (Count > 1) {
+         const double a = 1.0 / Count;
+         const double b = 1.0 - a;
+         dB[chn] = a * idB + b * dB[chn];
+      }
+      else {
+         dB[chn] = idB;
+      }
    }
    Matrix& WeightGrad(int chn) { return dW[chn]; }
    double BiasGrad(int chn) { return dB[chn]; }
@@ -376,6 +390,7 @@ public:
    void ResetCount() { Count = 0; }
    void UpdateComplete() {}
    void Reinit() {
+      Count = 0;
       for (Matrix& m : T1) { m.setZero(); }
       for (Matrix& m : T2) { m.setZero(); }
       for (double& m : N1) { m = 0.0; }
@@ -1001,12 +1016,255 @@ public:
 };
 //---------------------------------------------------------------
 
+/*
+   std::function<void(Matrix&, Matrix&, Matrix&)> FFT_LinearConvolutionAccumulate = [](Matrix& m, Matrix& h, Matrix& out) {
+      return sqrt( 2.0 / (r * c * (double)k) );
+   };
+   std::function<void(Matrix&, Matrix&, Matrix&)> CART_LinearConvolutionAccumulate = [](Matrix& m, Matrix& h, Matrix& out) {
+      return sqrt( 2.0 / (r + c + k) );
+   };
+
+   std::function<void(Matrix&, Matrix&, Matrix&)> LinearConvolutionAccumulate;
+public:
+
+   Initialize() {
+     
+      LinearConvolutionAccumulate = FFT_LinearConvolutionAccumulate;
+   }
+
+   IWeightsToNormDist(InitType init_type, int channels) : StdDev(-1.0), Channels(channels), Bias(0.0) {
+      switch(init_type) {
+         case Xavier:      fstdv = stdv_Xavier; break;
+         case Kaiming:     fstdv = stdv_Kaiming; break;
+         default:          fstdv = stdv_Xavier;
+      }
+*/
+
 // Convolution Layer classes ------------------------------------
 
 class FilterLayer2D : 
    public iConvoLayer, 
    public iStash 
 {
+public:
+   bool Cyclic_By_Row;
+   bool Cyclic_By_Col;
+   enum ConvolutionType { CART, FFT };
+   ConvolutionType ConvoType = FFT;
+   void SetConvolutionParameters(ConvolutionType ct, bool cyclic_row, bool cyclic_col) {
+      if ((cyclic_row || cyclic_col) && ct == CART) {
+         runtime_assert(0)
+      }
+
+      ConvoType = ct;
+
+      Cyclic_By_Row = cyclic_row;
+      Cyclic_By_Col = cyclic_col;
+
+      if (ct == FFT) {
+         LinearConvolutionAccumulate = FFT_LinearConvolutionAccumulate;
+         LinearCorrelate = FFT_LinearCorrelate;
+      }
+      else {
+         LinearConvolutionAccumulate = CART_LinearConvolutionAccumulate;
+         LinearCorrelate = CART_LinearCorrelate;
+      }
+   }
+   ConvolutionType GetConvoDomain() { return ConvoType; }
+   bool IsCyclicByRow() { return Cyclic_By_Row; }
+   bool IsCyclicByCol() { return Cyclic_By_Col; }
+
+private:
+   std::function<void(Matrix&, Matrix&, Matrix&)> LinearConvolutionAccumulate;
+
+   std::function<void(Matrix&, Matrix&, Matrix&)> FFT_LinearConvolutionAccumulate = [&](Matrix& m, Matrix& h, Matrix& out)
+   {
+      // Parameter 3: -1 = correlate | 1 = convolution
+      // Parameter 4 and 5 are defined as "force padding".  Force padding is used to insure a linear
+      // convolution, thus if you want a cyclical convolution pass in false.  That is the reason for
+      // the not operator below.
+      fft2convolve(m, h, out, 1, !Cyclic_By_Row, !Cyclic_By_Col, true);
+   };
+
+
+   std::function<void(Matrix&, Matrix&, Matrix&)> CART_LinearConvolutionAccumulate = [&](Matrix& m, Matrix& h, Matrix& out)
+   {
+      // Cartesion cyclic operation is not implemented.
+      assert(!Cyclic_By_Row && !Cyclic_By_Col);
+
+      const int mrows = (int)m.rows();
+      const int mcols = (int)m.cols();
+      const int hrows = (int)h.rows();
+      const int hcols = (int)h.cols();
+      const int orows = (int)out.rows();
+      const int ocols = (int)out.cols();
+      int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
+      int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; }
+      int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
+      int hc2 = hcols >> 1; if (!(hcols % 2)) { hc2--; }
+      int hr2p = hrows >> 1; // The complement of hr2
+      int hc2p = hcols >> 1;
+      int or2 = orows >> 1; if (!(orows % 2)) { or2--; }
+      int oc2 = ocols >> 1; if (!(ocols % 2)) { oc2--; }
+      
+      // Nested Lambda function. 
+      auto MultiplyReverseBlock = [](Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
+      {
+         double sum = 0.0;
+         for (int r = 0; r < size_r; r++) {
+            for (int c = 0; c < size_c; c++) {
+               sum += m(mr - r, mc - c) * h(hr + r, hc + c);
+            }
+         }
+         return sum;
+      };
+
+      for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
+         for (int c = 0; c < out.cols(); c++) {
+            int h1r, h1c;
+            int m2r, m2c;
+            int m1r, m1c;
+            int cr, cc;
+            cr = r + mr2 - or2;
+            cc = c + mc2 - oc2;
+            m2r = cr + hr2;  // Use h2 to the positive side because it is the negitive side
+            m2c = cc + hc2;  // relitive to the way convolution is performed.
+            m1r = cr - hr2p; // Similarly the negitive side physically is the positive
+            m1c = cc - hc2p; // side relitive to the convolution algorithm.
+            h1r = 0;
+            h1c = 0;
+
+            int shr = hrows;
+            if (m2r >= mrows) {
+               int d = m2r - mrows + 1;
+               m2r = mrows - 1;
+               h1r += d;
+               shr -= d;
+            }
+            if (m1r < 0) {
+               shr += m1r;
+               m1r = 0;
+            }
+
+            int shc = hcols;
+            if (m2c >= mcols) {
+               int d = m2c - mcols + 1;
+               m2c = mcols - 1;
+               h1c += d;
+               shc -= d;
+            }
+            if (m1c < 0) {
+               shc += m1c;
+               m1c = 0;
+            }
+
+            if (shr <= 0 || shc <= 0) {
+               //out(r, c) = 0.0;
+               ;
+            }
+            else {
+               //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+               out(r, c) += MultiplyReverseBlock(m, m2r, m2c, h, h1r, h1c, shr, shc);
+            }
+         }
+      }
+   };
+
+   std::function<void(Matrix&, Matrix&, Matrix&, double )> LinearCorrelate;
+
+   std::function<void(Matrix&, Matrix&, Matrix&, double)> FFT_LinearCorrelate = [&](Matrix& m, Matrix& h, Matrix& out, double bias = 0.0)
+   {
+      // Parameter 3: -1 = correlate | 1 = convolution
+      // Parameter 4 and 5 are defined as "force padding".  Force padding is used to insure a linear
+      // convolution, thus if you want a cyclical convolution pass in false.  That is the reason for
+      // the not operator below.
+      fft2convolve(m, h, out, -1, !Cyclic_By_Row, !Cyclic_By_Col, false);
+      if (bias != 0.0) {
+         out.array() += bias;
+      }
+   };
+
+   std::function<void(Matrix&, Matrix&, Matrix&, double)> CART_LinearCorrelate = [&](Matrix& m, Matrix& h, Matrix& out, double bias = 0.0)
+   {
+      const int mrows = (int)m.rows();
+      const int mcols = (int)m.cols();
+      const int hrows = (int)h.rows();
+      const int hcols = (int)h.cols();
+      const int orows = (int)out.rows();
+      const int ocols = (int)out.cols();
+      int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
+      int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; }
+      int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
+      int hc2 = hcols >> 1; if (!(hcols % 2)) { hc2--; }
+      int or2 = orows >> 1; if (!(orows % 2)) { or2--; }
+      int oc2 = ocols >> 1; if (!(ocols % 2)) { oc2--; }
+
+      //****************************************
+      // Nested Lambda function. 
+      auto MultiplyBlock = [](Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
+      {
+         double sum = 0.0;
+         for (int r = 0; r < size_r; r++) {
+            for (int c = 0; c < size_c; c++) {
+               sum += m(mr + r, mc + c) * h(hr + r, hc + c);
+            }
+         }
+         return sum;
+      };
+
+      auto MultiplyBlockWithEigen = [](Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c)
+      {
+         double sum = (m.array().block(mr, mc, size_r, size_c) * h.array().block(hr, hc, size_r, size_c)).sum();
+         return sum;
+      };
+      //****************************************
+
+      for (int r = 0; r < orows; r++) {     // Scan through the Correlation surface.
+         for (int c = 0; c < ocols; c++) {
+            int h1r, h1c;
+            int m1r, m1c;
+            m1r = r + mr2 - or2 - hr2;
+            m1c = c + mc2 - oc2 - hc2;
+
+            int shr = hrows;
+            if (m1r < 0) {
+               shr += m1r;
+               m1r = 0;
+               h1r = hrows - shr;
+            }
+            else {
+               h1r = 0;
+               shr = hrows;
+            }
+            if (m1r + shr > mrows) {
+               shr = mrows - m1r;
+            }
+
+            int shc = hcols;
+            if (m1c < 0) {
+               shc += m1c;
+               m1c = 0;
+               h1c = hcols - shc;
+            }
+            else {
+               h1c = 0;
+               shc = hcols;
+            }
+            if (m1c + shc > mcols) {
+               shc = mcols - m1c;
+            }
+
+            if (shr <= 0 || shc <= 0) {
+               out(r, c) = bias;
+            }
+            else {
+               //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
+               out(r, c) = bias + MultiplyBlockWithEigen(m, m1r, m1c, h, h1r, h1c, shr, shc);
+            }
+         }
+      }
+   };
+
 public:
    int FilterChannels;
    Size InputSize;
@@ -1063,9 +1321,14 @@ public:
       OutputChannels(output_channels),
       // REVIEW: Rename to InputChannels.
       Channels(input_channels),
+      Cyclic_By_Row(false),
+      Cyclic_By_Col(false),
       NoBias(no_bias),
       pOptomizer(_pOptomizer)
    {
+      LinearConvolutionAccumulate = FFT_LinearConvolutionAccumulate;
+      LinearCorrelate = FFT_LinearCorrelate;
+
       pActive->Resize(output_size.rows * output_size.cols); 
       pOptomizer->Resize(kernel_size.rows, kernel_size.cols, FilterChannels);
 
@@ -1132,189 +1395,6 @@ public:
 
       pOptomizer->Reinit();
    }
-
-#ifdef FFT
-   void LinearConvolutionAccumulate(Matrix& m, Matrix& h, Matrix& out)
-   {
-      // -1 = correlate | 1 = convolution
-#ifdef CYCLIC
-      fft2convolve(m, h, out, 1, false, true, true);
-#else
-      fft2convolve(m, h, out, 1, true, true, true);
-#endif
-   }
-#else
-   double MultiplyReverseBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
-   {
-      double sum = 0.0;
-      for (int r = 0; r < size_r; r++) {
-         for (int c = 0; c < size_c; c++) {
-            sum += m(mr-r, mc-c) * h(hr+r, hc+c);
-         }
-      }
-      return sum;
-   }
-
-   void LinearConvolutionAccumulate( Matrix& m, Matrix& h, Matrix& out )
-   {
-      const int mrows = (int)m.rows();
-      const int mcols = (int)m.cols();
-      const int hrows = (int)h.rows();
-      const int hcols = (int)h.cols();
-      const int orows = (int)out.rows();
-      const int ocols = (int)out.cols();
-      int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; }
-      int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; }
-      int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; }
-      int hc2 = hcols >> 1; if (!(hcols % 2)) { hc2--; }
-      int hr2p = hrows >> 1; // The complement of hr2
-      int hc2p = hcols >> 1;
-      int or2 = orows >> 1; if (!(orows % 2)) { or2--; }
-      int oc2 = ocols >> 1; if (!(ocols % 2)) { oc2--; }
-
-      for (int r = 0; r < out.rows(); r++) {     // Scan through the Correlation surface.
-         for (int c = 0; c < out.cols(); c++) {
-            int h1r, h1c;
-            int m2r, m2c;
-            int m1r, m1c;
-            int cr, cc;
-            cr = r + mr2 - or2;
-            cc = c + mc2 - oc2;
-            m2r = cr + hr2;  // Use h2 to the positive side because it is the negitive side
-            m2c = cc + hc2;  // relitive to the way convolution is performed.
-            m1r = cr - hr2p; // Similarly the negitive side physically is the positive
-            m1c = cc - hc2p; // side relitive to the convolution algorithm.
-            h1r = 0;
-            h1c = 0;
-
-            int shr = hrows;
-            if (m2r >= mrows) {
-               int d = m2r - mrows + 1;
-               m2r = mrows - 1;
-               h1r += d;
-               shr -= d;
-            }
-            if (m1r < 0) {
-               shr += m1r;
-               m1r = 0;
-            }
-
-            int shc = hcols;
-            if (m2c >= mcols) {
-               int d = m2c - mcols + 1;
-               m2c = mcols - 1;
-               h1c += d;
-               shc -= d;
-            }
-            if (m1c < 0) {
-               shc += m1c;
-               m1c = 0;
-            }
-
-            if (shr <= 0 || shc <= 0) {
-               //out(r, c) = 0.0;
-               ;
-            }
-            else {
-               //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
-               out(r, c) += MultiplyReverseBlock(m, m2r, m2c, h, h1r, h1c, shr, shc);
-            }
-         }
-      }
-   }
-#endif
-
-#ifdef FFT
-   void LinearCorrelate(Matrix& m, Matrix& h, Matrix& out, double bias = 0.0)
-   {
-#ifdef CYCLIC
-      fft2convolve(m, h, out, -1, false, true, false);
-#else
-      fft2convolve(m, h, out, -1, true, true, false);
-#endif
-      if (bias != 0.0) {
-         out.array() += bias;
-      }
-   }
-#else
-   double MultiplyBlock( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
-   {
-      double sum = 0.0;
-      for (int r = 0; r < size_r; r++) {
-         for (int c = 0; c < size_c; c++) {
-            sum += m(mr+r, mc+c) * h(hr+r, hc+c);
-         }
-      }
-      return sum;
-   }
-
-   double MultiplyBlockWithEigen( Matrix& m, int mr, int mc, Matrix& h, int hr, int hc, int size_r, int size_c )
-   {
-      double sum = (m.array().block(mr, mc, size_r, size_c) * h.array().block(hr, hc, size_r, size_c)).sum();
-
-      return sum;
-   }
-   void LinearCorrelate( Matrix& m, Matrix& h, Matrix& out, double bias = 0.0 )
-   {
-      const int mrows = (int)m.rows();
-      const int mcols = (int)m.cols();
-      const int hrows = (int)h.rows();
-      const int hcols = (int)h.cols();
-      const int orows = (int)out.rows();
-      const int ocols = (int)out.cols();
-      int mr2 = mrows >> 1; if (!(mrows % 2)) { mr2--; } 
-      int mc2 = mcols >> 1; if (!(mcols % 2)) { mc2--; } 
-      int hr2 = hrows >> 1; if (!(hrows % 2)) { hr2--; } 
-      int hc2 = hcols >> 1; if (!(hcols % 2)) { hc2--; } 
-      int or2 = orows >> 1; if (!(orows % 2)) { or2--; } 
-      int oc2 = ocols >> 1; if (!(ocols % 2)) { oc2--; } 
-
-      for (int r = 0; r < orows; r++) {     // Scan through the Correlation surface.
-         for (int c = 0; c < ocols; c++) {
-            int h1r, h1c;
-            int m1r, m1c;
-            m1r = r + mr2 - or2 - hr2;
-            m1c = c + mc2 - oc2 - hc2;
-
-            int shr = hrows;
-            if (m1r < 0) {
-               shr += m1r;
-               m1r = 0;
-               h1r = hrows - shr;
-            }
-            else {
-               h1r = 0;
-               shr = hrows;
-            }
-            if (m1r + shr > mrows) {
-               shr = mrows - m1r;
-            }
-
-            int shc = hcols;
-            if (m1c < 0) {
-               shc += m1c;
-               m1c = 0;
-               h1c = hcols - shc;
-            }
-            else {
-               h1c = 0;
-               shc = hcols;
-            }
-            if (m1c + shc > mcols) {
-               shc = mcols - m1c;
-            }
-
-            if (shr <= 0 || shc <= 0) {
-               out(r, c) = bias;
-            }
-            else {
-               //cout << m1r << "," << m1c << "," << h1r << "," << h1c << "," << shr << "," << shc << "," << endl;
-               out(r, c) = bias + MultiplyBlockWithEigen(m, m1r, m1c, h, h1r, h1c, shr, shc);
-            }
-         }
-      }
-   }
-#endif
 
    vector_of_matrix Eval(const vector_of_matrix& _x) 
    {
@@ -1525,7 +1605,7 @@ public:
             // Recall that rv_delta_grad is a vector map onto m_delta_grad.  Using
             // this channel delta_grad compute the update gradients for the current 
             // filter matrix iter_dW.
-            LinearCorrelate(X[chn], m_chan_delta_grad, iter_dW);
+            LinearCorrelate(X[chn], m_chan_delta_grad, iter_dW, 0.0);
 
             //cout << iter_dW << endl << endl;
 
@@ -2402,7 +2482,7 @@ public:
    {
       ofstream owf;
    public:
-      ErrorOutput(string path, string name) : owf(path + "\\" + name + ".error.csv", ios::trunc)
+      ErrorOutput(string path, string name, bool append = false) : owf(path + "\\" + name + ".error.csv", append ? ios::app : ios::trunc)
       {
          // Not usually nice to throw an error out of a constructor.
          runtime_assert(owf.is_open());

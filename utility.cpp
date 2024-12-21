@@ -14,9 +14,9 @@ void MakeMatrixRGBImage(string file, Matrix rm, Matrix gm, Matrix bm)
    unsigned char* pbs = pbytes;
    for (int r = 0; r < rows; r++) {
       for (int c = 0; c < cols; c++) {
-         pixel.r = static_cast<unsigned char>(rm(r, c) * 254);
-         pixel.g = static_cast<unsigned char>(gm(r, c) * 254);
-         pixel.b = static_cast<unsigned char>(bm(r, c) * 254);
+         pixel.r = static_cast<unsigned char>(rm(r, c) * 255.0);
+         pixel.g = static_cast<unsigned char>(gm(r, c) * 255.0);
+         pixel.b = static_cast<unsigned char>(bm(r, c) * 255.0);
 
          std::memcpy(pbs, &pixel, sizeof(pixel_data));
          pbs += sizeof(pixel_data);

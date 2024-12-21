@@ -25,6 +25,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SNBranchMNIST", "SNBranchMN
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SNGen1", "SNGen1\SNGen1.vcxproj", "{3B3FA8B2-98AF-4DF7-AA61-9E6DA103BC20}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SNcifar", "SNcifar\SNcifar.vcxproj", "{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -121,6 +123,14 @@ Global
 		{3B3FA8B2-98AF-4DF7-AA61-9E6DA103BC20}.Release|x64.Build.0 = Release|x64
 		{3B3FA8B2-98AF-4DF7-AA61-9E6DA103BC20}.Release|x86.ActiveCfg = Release|Win32
 		{3B3FA8B2-98AF-4DF7-AA61-9E6DA103BC20}.Release|x86.Build.0 = Release|Win32
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Debug|x64.ActiveCfg = Debug|x64
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Debug|x64.Build.0 = Debug|x64
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Debug|x86.ActiveCfg = Debug|Win32
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Debug|x86.Build.0 = Debug|Win32
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Release|x64.ActiveCfg = Release|x64
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Release|x64.Build.0 = Release|x64
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Release|x86.ActiveCfg = Release|Win32
+		{FDA5FBFA-3FD7-4215-B48E-6F502B5E2BBF}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

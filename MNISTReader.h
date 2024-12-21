@@ -49,6 +49,8 @@ public:
 
    typedef vector< MNIST_Pair> MNIST_list;
 
+   MNISTReader() : data_(DIM), label_(10) {}
+
    MNISTReader(string images_file, string labels_file ) : data_(DIM) , label_(10)
    {
       images.open(images_file, std::ios::binary);
@@ -59,7 +61,15 @@ public:
 
       reset(false);
    }
+   void open(string images_file, string labels_file) {
+      images.open(images_file, std::ios::binary);
+      labels.open(labels_file, std::ios::binary);
 
+      assert(images.is_open());
+      assert(labels.is_open());
+
+      reset(false);
+   }
    void reset(bool _reset = true ) {
       if (_reset) {
          images.clear();
